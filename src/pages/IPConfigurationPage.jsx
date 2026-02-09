@@ -222,10 +222,10 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
   };
 
   return (
-    <div className={`min-h-screen p-2 xs:p-3 sm:p-4 px-safe pt-safe pb-safe ${
+    <div className={`min-h-screen p-2 xs:p-3 sm:p-4 ${
       darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-blue-50 to-indigo-100'
     }`}>
-      <div className="flex flex-col lg:flex-row gap-3 xs:gap-4 sm:gap-6 max-w-7xl mx-auto">
+      <div className="flex flex-col gap-3 xs:gap-4 sm:gap-6 max-w-7xl mx-auto">
         {/* Main Configuration Card - Mobile Responsive */}
         <div className={`flex-1 ${
           darkMode ? 'bg-gray-800' : 'bg-white'
@@ -406,51 +406,55 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
             </div>
           </div>
 
-          {/* Action Buttons - Mobile Responsive */}
-          <div className="flex flex-col xs:flex-row gap-3 xs:gap-4">
-            <button
-              onClick={testConnections}
-              disabled={testingConnection}
-              className={`flex-1 flex items-center justify-center px-4 xs:px-6 py-3 xs:py-3 rounded-lg font-medium transition-colors touch-target tap-highlight ${
-                testingConnection
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : darkMode
-                    ? 'bg-blue-600 hover:bg-blue-700 text-white'
+          {/* Action Buttons - Sticky on mobile so they never disappear */}
+          <div
+            className={
+              "sticky bottom-0 -mx-4 xs:-mx-6 sm:-mx-8 px-4 xs:px-6 sm:px-8 pt-3 xs:pt-4 pb-4 bg-opacity-95 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md border-t " +
+              (darkMode ? "bg-gray-800 border-gray-700" : "bg-white/95 border-gray-200")
+            }
+            style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}
+          >
+            <div className="flex flex-col xs:flex-row gap-3 xs:gap-4">
+              <button
+                onClick={testConnections}
+                disabled={testingConnection}
+                className={`flex-1 flex items-center justify-center px-4 xs:px-6 py-3 rounded-lg font-semibold transition-colors touch-target tap-highlight ${
+                  testingConnection
+                    ? 'bg-gray-400 cursor-not-allowed'
                     : 'bg-blue-600 hover:bg-blue-700 text-white'
-              }`}
-              style={{ minHeight: '44px' }}
-            >
-              {testingConnection ? (
-                <Loader2 className="w-4 h-4 xs:w-5 xs:h-5 mr-1 xs:mr-2 animate-spin" />
-              ) : (
-                <Wifi className="w-4 h-4 xs:w-5 xs:h-5 mr-1 xs:mr-2" />
-              )}
-              <span className="text-sm xs:text-base">Test Connections</span>
-            </button>
+                }`}
+                style={{ minHeight: '48px' }}
+              >
+                {testingConnection ? (
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                ) : (
+                  <Wifi className="w-5 h-5 mr-2" />
+                )}
+                <span className="text-base">Test Connections</span>
+              </button>
 
-            <button
-              onClick={saveConfiguration}
-              disabled={isLoading}
-              className={`flex-1 flex items-center justify-center px-4 xs:px-6 py-3 xs:py-3 rounded-lg font-medium transition-colors touch-target tap-highlight ${
-                isLoading
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : connectionStatus.backend.status === 'error'
-                    ? 'bg-orange-600 hover:bg-orange-700 text-white'
-                    : darkMode
-                      ? 'bg-green-600 hover:bg-green-700 text-white'
+              <button
+                onClick={saveConfiguration}
+                disabled={isLoading}
+                className={`flex-1 flex items-center justify-center px-4 xs:px-6 py-3 rounded-lg font-semibold transition-colors touch-target tap-highlight ${
+                  isLoading
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : connectionStatus.backend.status === 'error'
+                      ? 'bg-orange-600 hover:bg-orange-700 text-white'
                       : 'bg-green-600 hover:bg-green-700 text-white'
-              }`}
-              style={{ minHeight: '44px' }}
-            >
-              {isLoading ? (
-                <Loader2 className="w-4 h-4 xs:w-5 xs:h-5 mr-1 xs:mr-2 animate-spin" />
-              ) : (
-                <ArrowRight className="w-4 h-4 xs:w-5 xs:h-5 mr-1 xs:mr-2" />
-              )}
-              <span className="text-sm xs:text-base">
-                {connectionStatus.backend.status === 'error' ? 'Save Anyway' : 'Save & Continue'}
-              </span>
-            </button>
+                }`}
+                style={{ minHeight: '48px' }}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                ) : (
+                  <ArrowRight className="w-5 h-5 mr-2" />
+                )}
+                <span className="text-base">
+                  {connectionStatus.backend.status === 'error' ? 'Save Anyway' : 'Save & Continue'}
+                </span>
+              </button>
+            </div>
           </div>
 
           {/* Dark Mode Toggle - Mobile Responsive */}
@@ -473,7 +477,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
         {/* Side Panel for Configuration Help - Mobile Responsive */}
         {(connectionStatus.asterisk.status === 'error' || connectionStatus.asterisk.status === 'warning' ||
           connectionStatus.backend.status === 'error') && (
-          <div className="w-full lg:w-96 space-y-3 xs:space-y-4">
+          <div className="w-full mt-4 space-y-3 xs:space-y-4">
 
             {/* Connection Details Panel - Mobile Responsive */}
             {(connectionStatus.asterisk.details || connectionStatus.backend.status === 'error') && (
@@ -568,7 +572,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
                     <p className={`font-medium mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
                       1. Enable HTTP Interface
                     </p>
-                    <div className={`p-3 rounded-lg font-mono text-xs ${
+                    <div className={`p-3 rounded-lg font-mono text-xs overflow-x-auto max-w-full ${
                       darkMode ? 'bg-gray-900 text-green-400' : 'bg-gray-100 text-gray-800'
                     }`}>
                       # /etc/asterisk/http.conf<br/>
@@ -583,7 +587,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
                     <p className={`font-medium mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
                       2. Configure WebSocket Transport
                     </p>
-                    <div className={`p-3 rounded-lg font-mono text-xs ${
+                    <div className={`p-3 rounded-lg font-mono text-xs overflow-x-auto max-w-full ${
                       darkMode ? 'bg-gray-900 text-green-400' : 'bg-gray-100 text-gray-800'
                     }`}>
                       # /etc/asterisk/pjsip.conf<br/>
@@ -598,7 +602,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
                     <p className={`font-medium mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
                       3. Setup AMI Access
                     </p>
-                    <div className={`p-3 rounded-lg font-mono text-xs ${
+                    <div className={`p-3 rounded-lg font-mono text-xs overflow-x-auto max-w-full ${
                       darkMode ? 'bg-gray-900 text-green-400' : 'bg-gray-100 text-gray-800'
                     }`}>
                       # /etc/asterisk/manager.conf<br/>
@@ -617,7 +621,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
                     <p className={`font-medium mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
                       4. Restart Services
                     </p>
-                    <div className={`p-3 rounded-lg font-mono text-xs ${
+                    <div className={`p-3 rounded-lg font-mono text-xs overflow-x-auto max-w-full ${
                       darkMode ? 'bg-gray-900 text-green-400' : 'bg-gray-100 text-gray-800'
                     }`}>
                       sudo systemctl restart asterisk<br/>
