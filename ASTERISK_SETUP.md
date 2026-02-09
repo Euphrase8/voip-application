@@ -28,7 +28,7 @@ configure-asterisk.bat
 ### Your Current Setup
 - **Asterisk Server**: 172.20.10.5 (Kali Linux)
 - **SSH Access**: `ssh kali@172.20.10.5` (password: kali)
-- **Backend/Client**: 172.20.10.4 (Windows)
+- **Backend/Client**: 192.168.1.2 (Windows)
 
 ### Backend Configuration
 Create or edit `backend/.env`:
@@ -47,7 +47,7 @@ Create or edit `.env` in project root:
 REACT_APP_SIP_SERVER=172.20.10.5
 REACT_APP_SIP_PORT=8088
 REACT_APP_SIP_WS_URL=ws://172.20.10.5:8088/ws
-REACT_APP_CLIENT_IP=172.20.10.4
+REACT_APP_CLIENT_IP=192.168.1.2
 ```
 
 ## Asterisk Server Configuration
@@ -203,7 +203,7 @@ sudo ufw allow ssh
 secret = your_secure_password
 read = system,call,log,verbose,command,agent,user,config
 write = system,call,log,verbose,command,agent,user,config
-permit = 172.20.10.4/32
+permit = 192.168.1.2/32
 ```
 
 ### SSL/TLS Configuration

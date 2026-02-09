@@ -58,10 +58,10 @@ npm test              # Run tests
 
 ### **Frontend (.env)**
 ```bash
-REACT_APP_API_URL=http://172.20.10.4:8080
+REACT_APP_API_URL=http://192.168.1.2:8080
 REACT_APP_SIP_SERVER=172.20.10.5          # ✅ Correct Asterisk IP
 REACT_APP_SIP_WS_URL=ws://172.20.10.5:8088/ws  # ✅ Correct WebSocket URL
-REACT_APP_CLIENT_IP=172.20.10.4
+REACT_APP_CLIENT_IP=192.168.1.2
 ```
 
 ### **Backend (backend/.env)**
@@ -74,8 +74,8 @@ ASTERISK_AMI_SECRET=amp111                 # ✅ Correct password
 
 ### **Network Setup**
 - **Asterisk Server**: 172.20.10.5 (Kali Linux) ✅
-- **Backend Server**: 172.20.10.4 (Windows) ✅
-- **Frontend Client**: 172.20.10.4 (Windows) ✅
+- **Backend Server**: 192.168.1.2 (Windows) ✅
+- **Frontend Client**: 192.168.1.2 (Windows) ✅
 
 ## 🎯 **Next Steps**
 

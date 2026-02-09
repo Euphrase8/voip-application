@@ -42,7 +42,7 @@
 
 ## Current Network Configuration
 
-- **Your PC (Backend + Frontend)**: 172.20.10.4
+- **Your PC (Backend + Frontend)**: 192.168.1.2
 - **Asterisk Server (Kali Linux)**: 172.20.10.5
 
 ## Testing Instructions
@@ -83,7 +83,7 @@ sudo asterisk -rx "pjsip show contacts"
 ```bash
 # Check browser console for:
 [websocketservice] ✅ WebSocket connected for extension 1005
-[websocketservice] WebSocket URL: ws://172.20.10.4:8080/ws?extension=1005
+[websocketservice] WebSocket URL: ws://192.168.1.2:8080/ws?extension=1005
 
 # Check backend logs for:
 WebSocket client connected: [timestamp] (extension: 1005)

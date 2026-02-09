@@ -220,7 +220,7 @@ nc -z localhost 8088 && echo "HTTP OK" || echo "HTTP Failed"
 
 1. Open your VoIP application at `http://localhost:3000`
 2. Enter the IP configuration:
-   - **Backend Host**: 172.20.10.4
+   - **Backend Host**: 192.168.1.2
    - **Backend Port**: 8080
    - **Asterisk Host**: 172.20.10.5
    - **Asterisk SIP Port**: 8088

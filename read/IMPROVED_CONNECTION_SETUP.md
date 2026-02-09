@@ -52,7 +52,7 @@ DEBUG=true
 ```env
 # Keep your current IPs as fallback
 ASTERISK_HOST=172.20.10.5
-PUBLIC_HOST=172.20.10.4
+PUBLIC_HOST=192.168.1.2
 ENVIRONMENT=development
 DEBUG=true
 ```
@@ -85,8 +85,8 @@ REACT_APP_SIP_WS_URL=ws://asterisk.local:8088/ws
 **For Your Current Setup (Fallback):**
 ```env
 # Use your current IPs
-REACT_APP_API_URL=http://172.20.10.4:8080
-REACT_APP_WS_URL=ws://172.20.10.4:8080/ws
+REACT_APP_API_URL=http://192.168.1.2:8080
+REACT_APP_WS_URL=ws://192.168.1.2:8080/ws
 REACT_APP_SIP_SERVER=172.20.10.5
 REACT_APP_SIP_WS_URL=ws://172.20.10.5:8088/ws
 ```
@@ -107,11 +107,11 @@ sudo systemctl start avahi-daemon
 
 **Option B: Add to hosts file**
 ```bash
-# On your PC (172.20.10.4), add to C:\Windows\System32\drivers\etc\hosts
+# On your PC (192.168.1.2), add to C:\Windows\System32\drivers\etc\hosts
 172.20.10.5 asterisk.local asterisk
 
 # On Asterisk server (172.20.10.5), add to /etc/hosts
-172.20.10.4 voip-frontend frontend
+192.168.1.2 voip-frontend frontend
 ```
 
 **Option C: Use DNS**

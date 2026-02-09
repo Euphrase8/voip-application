@@ -15,7 +15,7 @@ sudo ./fix-asterisk.sh
 ./verify-asterisk.sh
 ```
 
-### Step 2: Test from Your PC (172.20.10.4)
+### Step 2: Test from Your PC (192.168.1.2)
 
 ```bash
 # Run the connectivity test from your PC
@@ -214,7 +214,7 @@ sudo netstat -tlnp | grep -E "(5038|8088|5060)"
 echo -e "Action: Ping\r\n\r\n" | nc localhost 5038
 ```
 
-### From Your PC (172.20.10.4)
+### From Your PC (192.168.1.2)
 ```bash
 # Test connectivity
 ping 172.20.10.5

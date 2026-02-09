@@ -14,7 +14,7 @@ cd backend
 make dev
 
 # In another terminal, test the diagnostic endpoint
-curl -H "Authorization: Bearer YOUR_JWT_TOKEN" http://172.20.10.4:8080/protected/diagnostics
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" http://192.168.1.2:8080/protected/diagnostics
 ```
 
 ### 2. Check Asterisk Server Status
@@ -59,7 +59,7 @@ sudo cat /etc/asterisk/manager.conf | grep -A 10 "admin"
 ### 4. Network Connectivity Tests
 
 ```bash
-# From your PC (172.20.10.4), test connectivity to Asterisk
+# From your PC (192.168.1.2), test connectivity to Asterisk
 telnet 172.20.10.5 5038  # AMI port
 telnet 172.20.10.5 8088  # WebSocket port
 
@@ -165,7 +165,7 @@ write = all
 Then reload: `sudo asterisk -rx "module reload manager"`
 
 ### Issue 4: Firewall Blocking Connections
-**Symptoms**: Connection timeouts from 172.20.10.4 to 172.20.10.5
+**Symptoms**: Connection timeouts from 192.168.1.2 to 172.20.10.5
 
 **Solution**: On Kali Linux server:
 ```bash
@@ -189,7 +189,7 @@ sudo systemctl restart asterisk
 sudo asterisk -rx "module reload res_pjsip.so"
 sudo asterisk -rx "module reload manager"
 
-# On your PC (172.20.10.4)
+# On your PC (192.168.1.2)
 # Restart backend
 cd backend && make dev
 

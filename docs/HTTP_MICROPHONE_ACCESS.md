@@ -13,25 +13,25 @@ Modern browsers restrict microphone access on HTTP for security reasons. While t
 #### Method 1: Command Line Flags (Recommended for Development)
 ```bash
 # Windows
-chrome.exe --unsafely-treat-insecure-origin-as-secure="http://172.20.10.4:3000" --user-data-dir="C:\temp\chrome-dev"
+chrome.exe --unsafely-treat-insecure-origin-as-secure="http://192.168.1.2:3000" --user-data-dir="C:\temp\chrome-dev"
 
 # macOS
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --unsafely-treat-insecure-origin-as-secure="http://172.20.10.4:3000" --user-data-dir="/tmp/chrome-dev"
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --unsafely-treat-insecure-origin-as-secure="http://192.168.1.2:3000" --user-data-dir="/tmp/chrome-dev"
 
 # Linux
-google-chrome --unsafely-treat-insecure-origin-as-secure="http://172.20.10.4:3000" --user-data-dir="/tmp/chrome-dev"
+google-chrome --unsafely-treat-insecure-origin-as-secure="http://192.168.1.2:3000" --user-data-dir="/tmp/chrome-dev"
 ```
 
 #### Method 2: Chrome Flags
 1. Open `chrome://flags/` in Chrome
 2. Search for "Insecure origins treated as secure"
-3. Add your URL: `http://172.20.10.4:3000`
+3. Add your URL: `http://192.168.1.2:3000`
 4. Restart Chrome
 
 #### Method 3: Site Settings
 1. Go to `chrome://settings/content/microphone`
 2. Click "Add" next to "Allow"
-3. Add your URL: `http://172.20.10.4:3000`
+3. Add your URL: `http://192.168.1.2:3000`
 
 ### Mozilla Firefox
 
@@ -42,7 +42,7 @@ google-chrome --unsafely-treat-insecure-origin-as-secure="http://172.20.10.4:300
 4. Restart Firefox
 
 #### Method 2: Site Permissions
-1. Visit your site: `http://172.20.10.4:3000`
+1. Visit your site: `http://192.168.1.2:3000`
 2. Click the lock icon in the address bar
 3. Set Microphone to "Allow"
 
@@ -51,13 +51,13 @@ google-chrome --unsafely-treat-insecure-origin-as-secure="http://172.20.10.4:300
 #### Method 1: Edge Flags
 1. Open `edge://flags/` in Edge
 2. Search for "Insecure origins treated as secure"
-3. Add your URL: `http://172.20.10.4:3000`
+3. Add your URL: `http://192.168.1.2:3000`
 4. Restart Edge
 
 #### Method 2: Site Settings
 1. Go to `edge://settings/content/microphone`
 2. Click "Add" next to "Allow"
-3. Add your URL: `http://172.20.10.4:3000`
+3. Add your URL: `http://192.168.1.2:3000`
 
 ### Safari
 
@@ -100,7 +100,7 @@ npm start
 ```
 
 ### For Network Access:
-If you need to access from other devices on your network (like `172.20.10.4:3000`), follow the browser-specific solutions above.
+If you need to access from other devices on your network (like `192.168.1.2:3000`), follow the browser-specific solutions above.
 
 ## 🔍 Troubleshooting
 

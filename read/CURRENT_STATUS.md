@@ -9,7 +9,7 @@ Your VoIP application is now fully configured and working!
 
 ### Backend Connection
 - ✅ **Status**: Connected successfully
-- ✅ **Server**: Running on 172.20.10.4:8080
+- ✅ **Server**: Running on 192.168.1.2:8080
 - ✅ **Database**: SQLite connected
 - ✅ **WebSocket Hub**: Active and accepting connections
 
@@ -22,7 +22,7 @@ Your VoIP application is now fully configured and working!
 
 ### Frontend Application
 - ✅ **Status**: Running on localhost:3000
-- ✅ **Backend API**: Connected to 172.20.10.4:8080
+- ✅ **Backend API**: Connected to 192.168.1.2:8080
 - ✅ **Asterisk Tests**: All services reachable
 
 ## 📞 Available Extensions
@@ -67,7 +67,7 @@ The main issue was in the Asterisk manager configuration:
 ```
 Frontend (localhost:3000)
     ↓ HTTP API
-Backend (172.20.10.4:8080)
+Backend (192.168.1.2:8080)
     ↓ AMI Connection
 Asterisk Server (172.20.10.5)
     ├── AMI (Port 5038)

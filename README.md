@@ -1040,8 +1040,8 @@ tail -f backend/logs/app.log
 
 **Problem**: 403 Forbidden errors on admin endpoints
 ```bash
-[GIN] 2025/07/04 - 23:39:02 | 403 | 332µs | 172.20.10.4 | GET "/protected/admin/health"
-[GIN] 2025/07/04 - 23:39:02 | 403 | 0s | 172.20.10.4 | GET "/protected/admin/stats"
+[GIN] 2025/07/04 - 23:39:02 | 403 | 332µs | 192.168.1.2 | GET "/protected/admin/health"
+[GIN] 2025/07/04 - 23:39:02 | 403 | 0s | 192.168.1.2 | GET "/protected/admin/stats"
 ```
 
 **Root Cause**: User logged in with regular user role instead of admin role
