@@ -15,16 +15,20 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 module.exports = function (app) {
   const target = process.env.REACT_APP_PROXY_TARGET || 'http://192.168.1.2:8080';
 
-  // REST endpoints (include subpaths)
-  app.use(
-    ['/health', '/config', '/api/**', '/protected/**'],
-    createProxyMiddleware({
-      target,
-      changeOrigin: true,
-      secure: false,
-      logLevel: 'warn',
-    })
-  );
+  // REST endpoints
+  // NOTE: Use plain prefixes. CRA/Express matches subpaths automatically.
+  // Avoid glob patterns here; they can be finicky depending on middleware versions.
+  const restProxy = createProxyMiddleware({
+    target,
+    changeOrigin: true,
+    secure: false,
+    logLevel: 'warn',
+  });
+
+  app.use('/health', restProxy);
+  app.use('/config', restProxy);
+  app.use('/api', restProxy);
+  app.use('/protected', restProxy);
 
   // WebSocket endpoint
   app.use(
