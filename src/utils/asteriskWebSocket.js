@@ -46,10 +46,11 @@ export class AsteriskWebSocket {
           resolve(this);
         };
         
-        this.ws.onerror = (error) => {
+        this.ws.onerror = (evt) => {
           clearTimeout(timeout);
-          this.handleError(error);
-          reject(error);
+          this.handleError(evt);
+          const msg = evt?.message || evt?.type || 'WebSocket error';
+          reject(new Error(`[AsteriskWebSocket] ${msg}`));
         };
       });
     } catch (error) {
@@ -119,9 +120,11 @@ export class AsteriskWebSocket {
   }
 
   // Handle WebSocket error
-  handleError(error) {
-    console.error('[AsteriskWebSocket] WebSocket error:', error);
-    this.emit('error', error);
+  handleError(evt) {
+    const msg = evt?.message || evt?.type || String(evt);
+    console.error('[AsteriskWebSocket] WebSocket error:', msg, evt);
+    // Always emit an Error object to listeners to avoid "[object Event]" crashes.
+    this.emit('error', evt instanceof Error ? evt : new Error(msg));
   }
 
   // Schedule reconnection attempt

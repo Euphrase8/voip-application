@@ -92,15 +92,16 @@ class AsteriskWebSocketService {
           }
         };
 
-        this.ws.onerror = (error) => {
+        this.ws.onerror = (evt) => {
           clearTimeout(connectionTimeout);
-          console.error('[AsteriskWS] ❌ WebSocket error:', error);
-          
+          const msg = evt?.message || evt?.type || 'WebSocket error';
+          console.error('[AsteriskWS] ❌ WebSocket error:', msg, evt);
+
           if (this.onStatusChange) {
             this.onStatusChange('error');
           }
-          
-          reject(error);
+
+          reject(new Error(`[AsteriskWS] ${msg}`));
         };
 
         this.ws.onclose = (event) => {
