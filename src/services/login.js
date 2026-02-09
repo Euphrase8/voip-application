@@ -49,11 +49,11 @@ export const login = async (username, password) => {
   try {
     // In dev HTTPS mode, use same-origin URLs so CRA proxy can forward to backend.
     const useSameOrigin = process.env.NODE_ENV === 'development' && window.location.protocol === 'https:';
-    const baseUrl = useSameOrigin ? '' : validatedApiUrl;
+    const endpoint = useSameOrigin ? '/api/login' : `${validatedApiUrl}/api/login`;
 
-    console.log('[login.js] Attempting login for:', username, 'baseUrl:', baseUrl || '(same-origin)');
+    console.log('[login.js] Attempting login for:', username, 'endpoint:', endpoint);
 
-    const response = await axios.post(`${baseUrl}/api/login`, {
+    const response = await axios.post(endpoint, {
       username: username.trim(),
       password,
     }, {
