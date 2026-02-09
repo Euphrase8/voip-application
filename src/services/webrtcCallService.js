@@ -158,31 +158,54 @@ class WebRTCCallService {
     };
 
     this.ws.onmessage = async (event) => {
-      const message = JSON.parse(event.data);
-      console.log('[WebRTCCallService] Received message:', message);
+      // Some servers may send multiple JSON objects in one frame (newline-separated)
+      // or non-JSON keepalive data. Be defensive.
+      const raw = typeof event.data === 'string' ? event.data : '';
 
-      switch (message.type) {
-        case 'webrtc_call_invitation':
-          this.handleIncomingCallInvitation(message);
-          break;
-        case 'webrtc_call_accepted':
-          this.handleCallAccepted(message);
-          break;
-        case 'webrtc_call_rejected':
-          this.handleCallRejected(message);
-          break;
-        case 'webrtc_offer':
-          this.handleOffer(message);
-          break;
-        case 'webrtc_answer':
-          this.handleAnswer(message);
-          break;
-        case 'webrtc_ice_candidate':
-          this.handleIceCandidate(message);
-          break;
-        case 'webrtc_call_ended':
-          this.handleCallEnded(message);
-          break;
+      const frames = raw
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      for (const frame of frames.length ? frames : [raw]) {
+        if (!frame || typeof frame !== 'string') continue;
+
+        let message;
+        try {
+          message = JSON.parse(frame);
+        } catch (e) {
+          console.warn('[WebRTCCallService] Non-JSON or malformed WS message ignored:', frame.slice(0, 200));
+          continue;
+        }
+
+        console.log('[WebRTCCallService] Received message:', message);
+
+        switch (message.type) {
+          case 'webrtc_call_invitation':
+            this.handleIncomingCallInvitation(message);
+            break;
+          case 'webrtc_call_accepted':
+            this.handleCallAccepted(message);
+            break;
+          case 'webrtc_call_rejected':
+            this.handleCallRejected(message);
+            break;
+          case 'webrtc_offer':
+            this.handleOffer(message);
+            break;
+          case 'webrtc_answer':
+            this.handleAnswer(message);
+            break;
+          case 'webrtc_ice_candidate':
+            this.handleIceCandidate(message);
+            break;
+          case 'webrtc_call_ended':
+            this.handleCallEnded(message);
+            break;
+          default:
+            // ignore unknown message types
+            break;
+        }
       }
     };
 
