@@ -2350,8 +2350,8 @@ const SettingsTab = ({
     maxCallLogs: 1000,
     sessionTimeout: 24,
     enableDebugMode: false,
-    asteriskHost: '172.20.10.5',
-    backendHost: '172.20.10.4',
+    asteriskHost: '192.168.1.2',
+    backendHost: '192.168.1.2',
     sipPort: '8088',
     // Theme Settings
     theme: 'auto',
@@ -3241,8 +3241,8 @@ const SettingsTab = ({
                         maxCallLogs: 1000,
                         sessionTimeout: 24,
                         enableDebugMode: false,
-                        asteriskHost: '172.20.10.5',
-                        backendHost: '172.20.10.4',
+                        asteriskHost: '192.168.1.2',
+                        backendHost: '192.168.1.2',
                         sipPort: '8088',
                       });
                       toast.success('Settings reset to default');

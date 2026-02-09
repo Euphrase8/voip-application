@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { getToken } from './login';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://172.20.10.4:8080';
+const API_URL = process.env.REACT_APP_API_URL || 'http://192.168.1.2:8080';
 
 export const hangup = async (channel) => {
   try {

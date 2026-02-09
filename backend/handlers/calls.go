@@ -541,32 +541,7 @@ func testAMIConnection() map[string]interface{} {
 func testHTTPConnection() map[string]interface{} {
 	// Test Asterisk HTTP interface
 	asteriskHost := config.AppConfig.AsteriskHost
-	httpURL := fmt.Sprintf("http://%s:8088/asterisk/httpstatus", asteriskHost)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(httpURL)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-			"details": fmt.Sprintf("Failed to connect to %s", httpURL),
-		}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 200 {
-		return map[string]interface{}{
-			"success": true,
-			"message": "HTTP interface accessible",
-			"details": fmt.Sprintf("Asterisk HTTP responding on %s", httpURL),
-		}
-	}
-
-	return map[string]interface{}{
-		"success": false,
-		"error":   fmt.Sprintf("HTTP %d", resp.StatusCode),
-		"details": fmt.Sprintf("Asterisk HTTP returned status %d", resp.StatusCode),
-	}
+	return testHTTPConnectionWithConfig(asteriskHost, "8088")
 }
 
 func testWebSocketConnection() map[string]interface{} {
@@ -650,32 +625,54 @@ func testAMIConnectionWithConfig(asteriskHost, amiPort string) map[string]interf
 }
 
 func testHTTPConnectionWithConfig(asteriskHost, httpPort string) map[string]interface{} {
-	// Test Asterisk HTTP interface with custom config
-	httpURL := fmt.Sprintf("http://%s:%s/asterisk/httpstatus", asteriskHost, httpPort)
+	// Test Asterisk HTTP interface with custom config.
+	// Different Asterisk setups may expose different paths depending on `prefix`.
+	paths := []string{
+		"/asterisk/httpstatus",
+		"/httpstatus",
+		"/", // If HTTP server is up but httpstatus isn't enabled
+	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(httpURL)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-			"details": fmt.Sprintf("Failed to connect to %s", httpURL),
+
+	var lastErr error
+	for _, p := range paths {
+		httpURL := fmt.Sprintf("http://%s:%s%s", asteriskHost, httpPort, p)
+		resp, err := client.Get(httpURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_ = resp.Body.Close()
+
+		// Any HTTP response means the HTTP interface is reachable.
+		if resp.StatusCode > 0 {
+			if resp.StatusCode == 200 {
+				return map[string]interface{}{
+					"success": true,
+					"message": "HTTP interface accessible",
+					"details": fmt.Sprintf("Asterisk HTTP responding on %s", httpURL),
+				}
+			}
+
+			// For diagnostics, treat non-200 as reachable but not fully configured
+			return map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("HTTP %d", resp.StatusCode),
+				"details": fmt.Sprintf("Asterisk HTTP reachable on %s (status %d)", httpURL, resp.StatusCode),
+			}
 		}
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode == 200 {
-		return map[string]interface{}{
-			"success": true,
-			"message": "HTTP interface accessible",
-			"details": fmt.Sprintf("Asterisk HTTP responding on %s", httpURL),
-		}
+	details := fmt.Sprintf("Failed to connect to Asterisk HTTP on %s:%s", asteriskHost, httpPort)
+	if lastErr != nil {
+		details = fmt.Sprintf("%s (%v)", details, lastErr)
 	}
 
 	return map[string]interface{}{
 		"success": false,
-		"error":   fmt.Sprintf("HTTP %d", resp.StatusCode),
-		"details": fmt.Sprintf("Asterisk HTTP returned status %d", resp.StatusCode),
+		"error":   "connection_failed",
+		"details": details,
 	}
 }
 

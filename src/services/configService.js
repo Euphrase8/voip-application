@@ -130,7 +130,7 @@ class ConfigService {
       backendHost = (currentHost === 'localhost' || currentHost === '127.0.0.1')
         ? 'localhost'
         : currentHost;
-      asteriskHost = '172.20.10.5';
+      asteriskHost = '192.168.1.2';
     }
 
     return {
@@ -174,7 +174,7 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getBackendUrl();
     }
-    return this.get('api_url', 'http://172.20.10.2:8080');
+    return this.get('api_url', 'http://192.168.1.2:8080');
   }
 
   // Get WebSocket URL
@@ -182,7 +182,7 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getBackendWebSocketUrl();
     }
-    return this.get('ws_url', 'ws://172.20.10.2:8080/ws');
+    return this.get('ws_url', 'ws://192.168.1.2:8080/ws');
   }
 
   // Get Asterisk WebSocket URL
@@ -190,7 +190,7 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getAsteriskWebSocketUrl();
     }
-    return this.get('asterisk.ws_url', 'ws://172.20.10.2:8088/asterisk/ws');
+    return this.get('asterisk.ws_url', 'ws://192.168.1.2:8088/asterisk/ws');
   }
 
   // Get Asterisk Host
@@ -198,7 +198,7 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getAsteriskHost();
     }
-    return this.get('asterisk.host', '172.20.10.2');
+    return this.get('asterisk.host', '192.168.1.2');
   }
 
 

@@ -24,9 +24,9 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
   });
 
   const [config, setConfig] = useState({
-    backendHost: '172.20.10.4',
+    backendHost: '192.168.1.2',
     backendPort: '8080',
-    asteriskHost: '172.20.10.5',
+    asteriskHost: '192.168.1.2',
     asteriskPort: '8088',
     asteriskAMIPort: '5038'
   });
@@ -283,7 +283,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
                   type="text"
                   value={config.backendHost}
                   onChange={(e) => handleInputChange('backendHost', e.target.value)}
-                  placeholder="172.20.10.4"
+                  placeholder="192.168.1.2"
                   className={`w-full px-3 xs:px-4 py-2 xs:py-3 rounded-lg border focus:ring-2 focus:ring-blue-500 focus:border-transparent mobile-input touch-target ${
                     darkMode
                       ? 'bg-gray-600 border-gray-500 text-white placeholder-gray-400'
@@ -348,7 +348,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
                   type="text"
                   value={config.asteriskHost}
                   onChange={(e) => handleInputChange('asteriskHost', e.target.value)}
-                  placeholder="172.20.10.5"
+                  placeholder="192.168.1.2"
                   className={`w-full px-3 xs:px-4 py-2 xs:py-3 rounded-lg border focus:ring-2 focus:ring-blue-500 focus:border-transparent mobile-input touch-target ${
                     darkMode
                       ? 'bg-gray-600 border-gray-500 text-white placeholder-gray-400'

@@ -8,6 +8,10 @@
 const fs = require('fs');
 const path = require('path');
 
+const { getBackendBaseURL, getAsteriskConfig } = require('./_env');
+const backendURL = getBackendBaseURL();
+const asterisk = getAsteriskConfig();
+
 // Colors for console output
 const colors = {
   green: '\x1b[32m',
@@ -56,10 +60,10 @@ function displaySystemStatus() {
   // Asterisk Server Status
   log('🖥️  ASTERISK SERVER', 'bold');
   log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'cyan');
-  log(`   Host: 172.20.10.5`, 'blue');
+  log(`   Host: ${asterisk.host}`, 'blue');
   log(`   Status: ${createStatusIndicator('healthy')}`, 'green');
-  log(`   AMI Port: 5038 ✅ Connected`, 'green');
-  log(`   WebSocket Port: 8088 ✅ Ready`, 'green');
+  log(`   AMI Port: ${asterisk.amiPort} ✅ Connected`, 'green');
+  log(`   WebSocket Port: ${asterisk.sipPort} ✅ Ready`, 'green');
   log(`   SIP Endpoints: 6 configured (1000-1005)`, 'blue');
   log(`   Manager Users: 3 configured (admin, monitor, readonly)`, 'blue');
   log('', 'reset');
@@ -67,7 +71,7 @@ function displaySystemStatus() {
   // Backend Server Status
   log('⚙️  BACKEND SERVER', 'bold');
   log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'cyan');
-  log(`   Host: 172.20.10.4:8080`, 'blue');
+  log(`   Host: ${backendURL.hostname}:${backendURL.port}`, 'blue');
   log(`   Status: ${createStatusIndicator('healthy')}`, 'green');
   log(`   Health Endpoint: ✅ Working`, 'green');
   log(`   Config Endpoint: ✅ Working`, 'green');

@@ -8,6 +8,10 @@
 const fs = require('fs');
 const path = require('path');
 
+const { getBackendBaseURL, getAsteriskConfig } = require('./_env');
+const backendURL = getBackendBaseURL();
+const asterisk = getAsteriskConfig();
+
 // Colors for console output
 const colors = {
   green: '\x1b[32m',
@@ -37,9 +41,9 @@ function updateSystemStatus() {
     services: {
       asterisk: {
         status: 'healthy',
-        host: '172.20.10.5',
-        ami_port: 5038,
-        websocket_port: 8088,
+        host: asterisk.host,
+        ami_port: Number(asterisk.amiPort),
+        websocket_port: Number(asterisk.sipPort),
         last_check: new Date().toISOString(),
         details: {
           ami_connected: true,
@@ -50,8 +54,8 @@ function updateSystemStatus() {
       },
       backend: {
         status: 'healthy',
-        host: '172.20.10.4',
-        port: 8080,
+        host: backendURL.hostname,
+        port: Number(backendURL.port || 80),
         last_check: new Date().toISOString()
       },
       database: {
@@ -89,15 +93,15 @@ function displayStatus() {
   log('', 'reset');
   
   log('✅ Asterisk Server: HEALTHY', 'green');
-  log('   • Host: 172.20.10.5', 'blue');
-  log('   • AMI Port: 5038 (Connected)', 'blue');
-  log('   • WebSocket Port: 8088 (Ready)', 'blue');
+  log(`   • Host: ${asterisk.host}`, 'blue');
+  log(`   • AMI Port: ${asterisk.amiPort} (Connected)`, 'blue');
+  log(`   • WebSocket Port: ${asterisk.sipPort} (Ready)`, 'blue');
   log('   • Manager Users: 3 configured', 'blue');
   log('   • SIP Endpoints: 6 configured', 'blue');
   log('', 'reset');
   
   log('✅ Backend Server: HEALTHY', 'green');
-  log('   • Host: 172.20.10.4:8080', 'blue');
+  log(`   • Host: ${backendURL.hostname}:${backendURL.port}`, 'blue');
   log('   • AMI Connection: Established', 'blue');
   log('', 'reset');
   

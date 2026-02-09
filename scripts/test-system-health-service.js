@@ -38,9 +38,11 @@ function log(message, color = 'reset') {
 }
 
 // Mock SystemHealthService behavior
+const { getBackendBaseURL } = require('./_env');
+
 class MockSystemHealthService {
   constructor() {
-    this.baseURL = 'http://172.20.10.4:8080';
+    this.baseURL = getBackendBaseURL().toString().replace(/\/$/, '');
   }
 
   getAuthHeaders() {

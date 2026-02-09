@@ -40,11 +40,11 @@ class AsteriskConnectionDiagnostics {
 
   // Test backend health endpoint
   async testBackendHealth() {
-    const response = await fetch(`${CONFIG.API_URL}/api/system/health`, {
+    // Backend exposes /health (public). Older frontend code called /api/system/health,
+    // but that endpoint does not exist in this backend.
+    const response = await fetch(`${CONFIG.API_URL}/health`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
-      }
+      headers: { 'Content-Type': 'application/json' }
     });
 
     if (!response.ok) {
@@ -52,21 +52,14 @@ class AsteriskConnectionDiagnostics {
     }
 
     const data = await response.json();
-    
-    if (!data.success) {
-      throw new Error('Backend health check returned unsuccessful response');
-    }
 
-    const asteriskService = data.health?.services?.asterisk;
-    
     return {
-      status: asteriskService?.status || 'UNKNOWN',
+      status: data.status === 'ok' ? 'HEALTHY' : 'FAILED',
       details: {
-        asteriskStatus: asteriskService?.status,
-        asteriskError: asteriskService?.error,
-        responseTime: asteriskService?.response_time_ms,
-        overallHealth: data.health?.status,
-        services: Object.keys(data.health?.services || {})
+        backendService: data.service,
+        backendStatus: data.status,
+        responseTime: data.response_time_ms,
+        timestamp: data.timestamp
       }
     };
   }
@@ -112,8 +105,8 @@ class AsteriskConnectionDiagnostics {
       CONFIG.SIP_SERVER || 'localhost',
       'localhost',
       '127.0.0.1',
-      '172.20.10.5', // Common Asterisk IP
-      '172.20.10.2'  // Common backend IP
+      '192.168.1.2', // Common LAN IP (your PC)
+      'asterisk.local'
     ];
 
     for (const host of [...new Set(hosts)]) {
@@ -194,9 +187,16 @@ class AsteriskConnectionDiagnostics {
   // Test AMI connection through backend
   async testAMIConnection() {
     try {
-      // Try to get system health which includes AMI test
-      const response = await fetch(`${CONFIG.API_URL}/api/system/health`, {
-        method: 'GET'
+      // Use the backend public Asterisk test endpoint.
+      // This endpoint validates AMI + HTTP + WebSocket against a provided host/ports.
+      const response = await fetch(`${CONFIG.API_URL}/api/test-asterisk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asteriskHost: CONFIG.SIP_SERVER || 'localhost',
+          asteriskPort: String(CONFIG.SIP_PORT || '8088'),
+          asteriskAMIPort: '5038'
+        })
       });
 
       if (!response.ok) {
@@ -204,19 +204,20 @@ class AsteriskConnectionDiagnostics {
       }
 
       const data = await response.json();
-      const asteriskService = data.health?.services?.asterisk;
+      const results = data.results;
 
-      if (!asteriskService) {
-        throw new Error('Asterisk service not found in health response');
+      if (!data.success || !results) {
+        throw new Error(data.error || 'Invalid test response');
       }
 
+      const overall = results.overall_success ? 'HEALTHY' : 'FAILED';
+
       return {
-        status: asteriskService.status.toUpperCase(),
+        status: overall,
         details: {
-          amiConnected: asteriskService.details?.ami_connected,
-          coreStatus: asteriskService.details?.core_status,
-          error: asteriskService.error,
-          responseTime: asteriskService.response_time_ms
+          overall_success: results.overall_success,
+          summary: results.summary,
+          tests: results.tests
         }
       };
     } catch (error) {

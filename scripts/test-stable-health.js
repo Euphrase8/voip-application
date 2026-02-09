@@ -7,9 +7,12 @@
 
 const http = require('http');
 
-// Configuration
-const BACKEND_HOST = '172.20.10.4';
-const BACKEND_PORT = 8080;
+const { getBackendBaseURL } = require('./_env');
+
+// Configuration (resolved from .env)
+const backendURL = getBackendBaseURL();
+const BACKEND_HOST = backendURL.hostname;
+const BACKEND_PORT = Number(backendURL.port || 80);
 const TEST_DURATION = 60; // Test for 60 seconds
 const CHECK_INTERVAL = 5; // Check every 5 seconds
 

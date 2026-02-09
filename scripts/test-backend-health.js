@@ -8,9 +8,12 @@
 const https = require('https');
 const http = require('http');
 
-// Configuration
-const BACKEND_HOST = '172.20.10.4';
-const BACKEND_PORT = 8080;
+const { getBackendBaseURL } = require('./_env');
+
+// Configuration (resolved from .env)
+const backendURL = getBackendBaseURL();
+const BACKEND_HOST = backendURL.hostname;
+const BACKEND_PORT = Number(backendURL.port || 80);
 
 // Colors for console output
 const colors = {
@@ -143,7 +146,7 @@ async function testConfig() {
 async function main() {
   log('🔍 Testing Backend Health Endpoints', 'bold');
   log('===================================', 'blue');
-  log(`Backend: http://${BACKEND_HOST}:${BACKEND_PORT}`, 'blue');
+  log(`Backend: ${backendURL.toString().replace(/\/$/, '')}`, 'blue');
   log('', 'reset');
   
   const results = [];

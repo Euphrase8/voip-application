@@ -9,11 +9,11 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
-// Configuration
-const ASTERISK_HOST = '172.20.10.5';
-const ASTERISK_AMI_PORT = 5038;
-const AMI_USERNAME = 'admin';
-const AMI_PASSWORD = 'amp111';
+const { getAsteriskConfig } = require('./_env');
+
+// Configuration (resolved from .env)
+const { host: ASTERISK_HOST, amiPort, amiUsername: AMI_USERNAME, amiSecret: AMI_PASSWORD } = getAsteriskConfig();
+const ASTERISK_AMI_PORT = Number(amiPort);
 
 // Colors for console output
 const colors = {

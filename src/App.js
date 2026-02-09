@@ -129,7 +129,7 @@ const App = () => {
             },
             callStatus: 'Incoming',
             isOutgoing: false,
-            channel: `${call.from}@172.20.10.5`,
+            channel: `${call.from}@${(CONFIG?.SIP_SERVER || '192.168.1.2')}`, 
             session: call.session,
           },
         });

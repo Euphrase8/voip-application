@@ -8,14 +8,19 @@
 const net = require('net');
 const http = require('http');
 
-// Configuration
-const ASTERISK_HOST = '172.20.10.5';
-const ASTERISK_AMI_PORT = 5038;
-const ASTERISK_WS_PORT = 8088;
-const BACKEND_HOST = '172.20.10.4';
-const BACKEND_PORT = 8080;
-const AMI_USERNAME = 'admin';
-const AMI_PASSWORD = 'amp111';
+const { getBackendBaseURL, getAsteriskConfig } = require('./_env');
+
+// Configuration (resolved from .env)
+const backendURL = getBackendBaseURL();
+const BACKEND_HOST = backendURL.hostname;
+const BACKEND_PORT = Number(backendURL.port || 80);
+
+const asterisk = getAsteriskConfig();
+const ASTERISK_HOST = asterisk.host;
+const ASTERISK_AMI_PORT = Number(asterisk.amiPort);
+const ASTERISK_WS_PORT = Number(asterisk.sipPort);
+const AMI_USERNAME = asterisk.amiUsername;
+const AMI_PASSWORD = asterisk.amiSecret;
 
 // Colors for console output
 const colors = {
@@ -232,19 +237,19 @@ async function provideSolutions(asteriskOk, backendOk) {
   if (!asteriskOk) {
     log('🔧 ASTERISK ISSUES:', 'red');
     log('1. Check if Asterisk is running:', 'yellow');
-    log('   ssh kali@172.20.10.5 "sudo systemctl status asterisk"', 'cyan');
+    log(`   ssh kali@${ASTERISK_HOST} "sudo systemctl status asterisk"`, 'cyan');
     log('', 'reset');
     
     log('2. Restart Asterisk if needed:', 'yellow');
-    log('   ssh kali@172.20.10.5 "sudo systemctl restart asterisk"', 'cyan');
+    log(`   ssh kali@${ASTERISK_HOST} "sudo systemctl restart asterisk"`, 'cyan');
     log('', 'reset');
     
     log('3. Check AMI configuration:', 'yellow');
-    log('   ssh kali@172.20.10.5 "sudo asterisk -rx \'manager show users\'"', 'cyan');
+    log(`   ssh kali@${ASTERISK_HOST} "sudo asterisk -rx 'manager show users'"`, 'cyan');
     log('', 'reset');
     
     log('4. Reload manager configuration:', 'yellow');
-    log('   ssh kali@172.20.10.5 "sudo asterisk -rx \'module reload manager\'"', 'cyan');
+    log(`   ssh kali@${ASTERISK_HOST} "sudo asterisk -rx 'module reload manager'"`, 'cyan');
     log('', 'reset');
   }
   

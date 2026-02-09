@@ -53,7 +53,7 @@ class AsteriskDiagnostics {
   // Test backend health endpoint
   async testBackendHealth() {
     try {
-      const response = await fetch('/api/health', {
+      const response = await fetch('/health', {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -84,45 +84,35 @@ class AsteriskDiagnostics {
   // Test system health API specifically
   async testSystemHealthAPI() {
     try {
-      const response = await fetch('/api/system/health', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
+      // Backend does not provide /api/system/health.
+      // Use public /api/test-asterisk to validate Asterisk connectivity.
+      const response = await fetch('/api/test-asterisk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asteriskHost: '192.168.1.2',
+          asteriskPort: '8088',
+          asteriskAMIPort: '5038'
+        })
       });
 
       if (response.ok) {
         const data = await response.json();
-        
-        if (data.success && data.health) {
-          const asteriskService = data.health.services?.asterisk;
-          
-          if (asteriskService) {
-            if (asteriskService.status === 'healthy') {
-              return {
-                status: 'pass',
-                message: 'Asterisk service reported as healthy',
-                details: asteriskService
-              };
-            } else {
-              return {
-                status: 'fail',
-                message: `Asterisk service status: ${asteriskService.status}`,
-                details: asteriskService
-              };
-            }
-          } else {
-            return {
-              status: 'fail',
-              message: 'Asterisk service not found in health response',
-              details: data.health
-            };
-          }
-        } else {
+
+        if (!data.success || !data.results) {
           return {
             status: 'fail',
-            message: 'Invalid system health response format',
+            message: 'Invalid Asterisk test response format',
             details: data
           };
         }
+
+        const overallSuccess = !!data.results.overall_success;
+        return {
+          status: overallSuccess ? 'pass' : 'fail',
+          message: overallSuccess ? 'Asterisk connectivity tests passed' : `Asterisk connectivity tests failed: ${data.results.summary}`,
+          details: data.results
+        };
       } else {
         return {
           status: 'fail',
@@ -193,7 +183,7 @@ class AsteriskDiagnostics {
   async testNetworkConnectivity() {
     const commonHosts = [
       'asterisk.local',
-      '172.20.10.5',
+      '192.168.1.2',
       '192.168.1.100',
       'localhost'
     ];
@@ -316,7 +306,7 @@ class AsteriskDiagnostics {
     // Network connectivity issues
     if (tests.networkConnectivity?.status === 'fail') {
       suggestions.push('🔧 No Asterisk hosts reachable - check network connectivity');
-      suggestions.push('🔧 Try setting ASTERISK_HOST to your Asterisk server IP (e.g., 172.20.10.5)');
+      suggestions.push('🔧 Try setting ASTERISK_HOST to your Asterisk server IP (e.g., 192.168.1.2)');
     }
 
     return suggestions;
@@ -328,7 +318,7 @@ class AsteriskDiagnostics {
       {
         title: 'Set Asterisk Host Environment Variable',
         description: 'Set ASTERISK_HOST to your Asterisk server IP',
-        command: 'export ASTERISK_HOST=172.20.10.5',
+        command: 'export ASTERISK_HOST=192.168.1.2',
         type: 'environment'
       },
       {
@@ -340,7 +330,7 @@ class AsteriskDiagnostics {
       {
         title: 'Test AMI Connection',
         description: 'Test AMI connectivity from backend server',
-        command: 'telnet 172.20.10.5 5038',
+        command: 'telnet 192.168.1.2 5038',
         type: 'network'
       },
       {

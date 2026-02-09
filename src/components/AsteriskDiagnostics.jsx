@@ -208,24 +208,24 @@ const AsteriskDiagnostics = ({ darkMode = false, onClose }) => {
                   "bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800"
                 )}>
                   <h4 className="font-medium mb-2 text-blue-800 dark:text-blue-300">
-                    SSH Connection to Kali Linux
+                    Local Asterisk Service (this PC)
                   </h4>
                   <div className="space-y-2 text-sm">
                     <div className="flex items-center space-x-2">
-                      <span className="font-medium">Command:</span>
+                      <span className="font-medium">Check status:</span>
                       <code className="bg-blue-100 dark:bg-blue-900/40 px-2 py-1 rounded">
-                        ssh kali@172.20.10.5
+                        sudo systemctl status asterisk
                       </code>
                     </div>
                     <div className="flex items-center space-x-2">
-                      <span className="font-medium">Password:</span>
+                      <span className="font-medium">Restart:</span>
                       <code className="bg-blue-100 dark:bg-blue-900/40 px-2 py-1 rounded">
-                        kali
+                        sudo systemctl restart asterisk
                       </code>
                     </div>
                     <div className="text-blue-700 dark:text-blue-400">
-                      <p>• Ensure SSH service is running: <code>sudo systemctl start ssh</code></p>
-                      <p>• Check firewall: <code>sudo ufw allow ssh</code></p>
+                      <p>• Make sure ports are open: 5038 (AMI) and 8088 (HTTP/WebSocket)</p>
+                      <p>• If using UFW: <code>sudo ufw allow 5038/tcp</code> and <code>sudo ufw allow 8088/tcp</code></p>
                     </div>
                   </div>
                 </div>

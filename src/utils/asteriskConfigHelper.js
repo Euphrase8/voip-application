@@ -6,10 +6,10 @@ import { showToast } from './toastUtils';
 class AsteriskConfigHelper {
   constructor() {
     this.commonHosts = [
+      { name: 'This PC (LAN IP 192.168.1.2)', host: '192.168.1.2', port: '5038' },
+      { name: 'Localhost (same machine)', host: 'localhost', port: '5038' },
       { name: 'Local Docker (asterisk.local)', host: 'asterisk.local', port: '5038' },
-      { name: 'Local Network (172.20.10.5)', host: '172.20.10.5', port: '5038' },
-      { name: 'Local Network (192.168.1.100)', host: '192.168.1.100', port: '5038' },
-      { name: 'Localhost', host: 'localhost', port: '5038' },
+      { name: 'Other LAN (192.168.1.100)', host: '192.168.1.100', port: '5038' },
       { name: 'Custom', host: '', port: '5038' }
     ];
   }
@@ -65,31 +65,26 @@ class AsteriskConfigHelper {
 
     // Test 2: Backend health check with this host
     try {
-      const response = await fetch('/api/system/health', {
+      const response = await fetch('/api/test-asterisk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          testConfig: {
-            asteriskHost: host,
-            asteriskPort: port
-          }
+          asteriskHost: host,
+          asteriskPort: '8088',
+          asteriskAMIPort: port
         })
       });
 
       if (response.ok) {
         const data = await response.json();
-        if (data.success && data.health?.services?.asterisk?.status === 'healthy') {
-          testResults.tests.ami = { status: 'pass', message: 'AMI connection successful' };
-        } else {
-          testResults.tests.ami = { 
-            status: 'fail', 
-            message: `AMI connection failed: ${data.health?.services?.asterisk?.error || 'Unknown error'}` 
-          };
-        }
+        const ok = !!data?.results?.overall_success;
+        testResults.tests.ami = ok
+          ? { status: 'pass', message: 'AMI/HTTP/WebSocket tests passed via backend' }
+          : { status: 'fail', message: `Asterisk tests failed: ${data?.results?.summary || data?.error || 'Unknown error'}` };
       } else {
-        testResults.tests.ami = { 
-          status: 'fail', 
-          message: `Health check failed: ${response.status}` 
+        testResults.tests.ami = {
+          status: 'fail',
+          message: `Asterisk test failed: ${response.status}`
         };
       }
     } catch (error) {
@@ -190,7 +185,7 @@ class AsteriskConfigHelper {
         title: 'Local Network Server',
         description: 'If Asterisk is running on a local network server',
         config: {
-          host: '172.20.10.5',
+          host: '192.168.1.2',
           port: '5038',
           username: 'admin',
           secret: 'amp111'

@@ -26,11 +26,10 @@ class NetworkDiagnostics {
     
     // Test known IPs first
     const knownIPs = [
-      '172.20.10.5',  // Your Kali machine
-      '172.20.10.2',  // Common backend IP
-      '172.20.10.1',  // Gateway
+      '192.168.1.2',  // This PC / common LAN IP
       'localhost',
-      '127.0.0.1'
+      '127.0.0.1',
+      'asterisk.local'
     ];
 
     // Test known IPs first
@@ -223,7 +222,6 @@ class NetworkDiagnostics {
   generateIPRanges(networkInfo) {
     const ranges = [
       // Common private network ranges
-      '172.20.10.0/24',   // Your current network
       '192.168.1.0/24',   // Common home network
       '192.168.0.0/24',   // Common home network
       '10.0.0.0/24',      // Common corporate network
