@@ -15,6 +15,7 @@ import WebRTCTestPage from './pages/WebRTCTestPage';
 import IPConfigurationPage from './pages/IPConfigurationPage';
 import Loader from './components/loader';
 import { initializeSIP } from './services/call';
+import CONFIG from './services/config';
 import VoipPhone from './components/VoipPhone';
 import IncomingCallListener from './pages/IncomingCallListener';
 import BrowserCompatibilityAlert from './components/BrowserCompatibilityAlert';
