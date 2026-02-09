@@ -101,42 +101,47 @@ class AsteriskConnectionDiagnostics {
   // Test network connectivity
   async testNetworkConnectivity() {
     const tests = [];
-    const hosts = [
-      CONFIG.SIP_SERVER || 'localhost',
-      'localhost',
-      '127.0.0.1',
-      '192.168.1.2', // Common LAN IP (your PC)
-      'asterisk.local'
-    ];
 
-    for (const host of [...new Set(hosts)]) {
+    // Only test hosts that matter for *this* configuration.
+    // Testing random discovery names like asterisk.local creates false WARNINGS.
+    const primaryHost = CONFIG.SIP_SERVER || 'localhost';
+    const hosts = [primaryHost, 'localhost', '127.0.0.1', '192.168.1.2'];
+
+    for (const host of [...new Set(hosts)].filter(Boolean)) {
       try {
         const testUrl = `http://${host}:8088/`;
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
-        
+
         await fetch(testUrl, {
           method: 'HEAD',
           signal: controller.signal,
           mode: 'no-cors'
         });
-        
+
         clearTimeout(timeoutId);
         tests.push({ host, status: 'REACHABLE' });
       } catch (error) {
-        tests.push({ 
-          host, 
-          status: 'UNREACHABLE', 
-          error: error.name === 'AbortError' ? 'Timeout' : error.message 
+        tests.push({
+          host,
+          status: 'UNREACHABLE',
+          error: error.name === 'AbortError' ? 'Timeout' : error.message
         });
       }
     }
 
     const reachableHosts = tests.filter(t => t.status === 'REACHABLE');
-    
+    const primaryReachable = reachableHosts.some(t => t.host === primaryHost);
+
+    // If the configured SIP server is reachable, treat network as healthy.
+    // PARTIAL is reserved for cases where only fallbacks are reachable.
+    const status = primaryReachable ? 'HEALTHY' : (reachableHosts.length > 0 ? 'PARTIAL' : 'FAILED');
+
     return {
-      status: reachableHosts.length > 0 ? 'PARTIAL' : 'FAILED',
+      status,
       details: {
+        primaryHost,
+        primaryReachable,
         tests,
         reachableHosts: reachableHosts.map(t => t.host),
         totalTested: tests.length,
@@ -283,7 +288,12 @@ class AsteriskConnectionDiagnostics {
     const statuses = Object.values(this.results).map(r => r.status);
     
     if (statuses.includes('FAILED')) return 'FAILED';
-    if (statuses.includes('PARTIAL') || statuses.includes('ISSUES_FOUND')) return 'WARNING';
+    if (statuses.includes('ISSUES_FOUND')) return 'WARNING';
+
+    // Treat PARTIAL network discovery as warning only if core services aren't healthy.
+    // (Network discovery can be noisy; the primary host test already marks HEALTHY.)
+    if (statuses.includes('PARTIAL')) return 'WARNING';
+
     if (statuses.every(s => s === 'HEALTHY' || s === 'REACHABLE' || s === 'VALID')) return 'HEALTHY';
     
     return 'UNKNOWN';
