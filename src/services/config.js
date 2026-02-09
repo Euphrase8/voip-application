@@ -18,11 +18,21 @@ class DynamicConfig {
 
   // Get API URL dynamically
   get API_URL() {
+    // If the app is served over HTTPS (e.g. behind nginx), avoid mixed-content by using
+    // same-origin API calls and routing via the reverse proxy.
+    if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:') {
+      return window.location.origin;
+    }
+
     return process.env.REACT_APP_API_URL || configService.getApiUrl();
   }
 
   // Get WebSocket URL dynamically
   get WS_URL() {
+    if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:') {
+      return window.location.origin.replace(/^https:/, 'wss:') + '/ws';
+    }
+
     return process.env.REACT_APP_WS_URL || configService.getWebSocketUrl();
   }
 
