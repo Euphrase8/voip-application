@@ -547,34 +547,52 @@ func testHTTPConnection() map[string]interface{} {
 func testWebSocketConnection() map[string]interface{} {
 	// Test WebSocket endpoint availability by attempting a proper WebSocket connection
 	asteriskHost := config.AppConfig.AsteriskHost
-	wsURL := fmt.Sprintf("ws://%s:8088/asterisk/ws", asteriskHost)
+
+	// Different Asterisk setups may use /ws (no prefix) or /asterisk/ws (with prefix).
+	candidates := []string{
+		fmt.Sprintf("ws://%s:8088/ws", asteriskHost),
+		fmt.Sprintf("ws://%s:8088/asterisk/ws", asteriskHost),
+	}
 
 	// Test WebSocket connection with proper headers
 	dialer := gorillaws.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 	}
 
-	// Attempt WebSocket connection
-	conn, resp, err := dialer.Dial(wsURL, nil)
-	if err != nil {
-		// Check if it's a WebSocket-related error (which means the endpoint exists)
-		if resp != nil {
-			if resp.StatusCode == 400 || resp.StatusCode == 426 {
-				// Bad Request or Upgrade Required - WebSocket endpoint exists but needs proper headers
-				return map[string]interface{}{
-					"success": true,
-					"message": "WebSocket endpoint is available",
-					"details": fmt.Sprintf("WebSocket endpoint at %s is responding (status: %d)", wsURL, resp.StatusCode),
-				}
+	// Attempt WebSocket connection (try multiple candidates)
+	var conn *gorillaws.Conn
+	var resp *http.Response
+	var err error
+	var tried []string
+	for _, wsURL := range candidates {
+		tried = append(tried, wsURL)
+		conn, resp, err = dialer.Dial(wsURL, nil)
+		if err == nil {
+			break
+		}
+		// If we got a meaningful HTTP response, treat it as “endpoint exists”.
+		if resp != nil && (resp.StatusCode == 400 || resp.StatusCode == 426) {
+			return map[string]interface{}{
+				"success": true,
+				"message": "WebSocket endpoint is available",
+				"details": fmt.Sprintf("WebSocket endpoint at %s is responding (status: %d)", wsURL, resp.StatusCode),
 			}
 		}
-
-		// Try fallback HTTP test to see if the port is open
-		httpURL := fmt.Sprintf("http://%s:8088/asterisk/ws", asteriskHost)
+	}
+	if err != nil {
+		// Try fallback HTTP tests to see if the endpoint exists
+		httpCandidates := []string{
+			fmt.Sprintf("http://%s:8088/ws", asteriskHost),
+			fmt.Sprintf("http://%s:8088/asterisk/ws", asteriskHost),
+		}
 		client := &http.Client{Timeout: 3 * time.Second}
-		httpResp, httpErr := client.Get(httpURL)
-		if httpErr == nil {
-			defer httpResp.Body.Close()
+
+		for _, httpURL := range httpCandidates {
+			httpResp, httpErr := client.Get(httpURL)
+			if httpErr != nil {
+				continue
+			}
+			_ = httpResp.Body.Close()
 			if httpResp.StatusCode == 400 || httpResp.StatusCode == 426 {
 				return map[string]interface{}{
 					"success": true,
@@ -587,7 +605,7 @@ func testWebSocketConnection() map[string]interface{} {
 		return map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
-			"details": fmt.Sprintf("Failed to connect to WebSocket at %s", wsURL),
+			"details": fmt.Sprintf("Failed to connect to WebSocket. Tried: %v", tried),
 		}
 	}
 
@@ -596,7 +614,7 @@ func testWebSocketConnection() map[string]interface{} {
 	return map[string]interface{}{
 		"success": true,
 		"message": "WebSocket connection successful",
-		"details": fmt.Sprintf("Successfully connected to %s", wsURL),
+		"details": fmt.Sprintf("Successfully connected (tried: %v)", tried),
 	}
 }
 
@@ -680,8 +698,8 @@ func testWebSocketConnectionWithConfig(asteriskHost, httpPort string) map[string
 	// Test WebSocket endpoint availability with custom config
 	// Try multiple possible WebSocket endpoints
 	endpoints := []string{
-		fmt.Sprintf("http://%s:%s/asterisk/ws", asteriskHost, httpPort),
 		fmt.Sprintf("http://%s:%s/ws", asteriskHost, httpPort),
+		fmt.Sprintf("http://%s:%s/asterisk/ws", asteriskHost, httpPort),
 		fmt.Sprintf("http://%s:%s/rawman", asteriskHost, httpPort),
 	}
 

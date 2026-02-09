@@ -138,7 +138,7 @@ class ConfigService {
       ws_url: `ws://${backendHost}:8080/ws`,
       asterisk: {
         host: asteriskHost,
-        ws_url: `ws://${asteriskHost}:8088/asterisk/ws`,
+        ws_url: `ws://${asteriskHost}:8088/ws`,
       },
       environment: 'development',
       debug: true,
@@ -190,7 +190,7 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getAsteriskWebSocketUrl();
     }
-    return this.get('asterisk.ws_url', 'ws://192.168.1.2:8088/asterisk/ws');
+    return this.get('asterisk.ws_url', 'ws://192.168.1.2:8088/ws');
   }
 
   // Get Asterisk Host

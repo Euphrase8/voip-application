@@ -84,7 +84,7 @@ class IPConfigService {
   // Get Asterisk WebSocket URL
   getAsteriskWebSocketUrl() {
     const config = this.getConfig();
-    return `ws://${config.asteriskHost}:${config.asteriskPort}/asterisk/ws`;
+    return `ws://${config.asteriskHost}:${config.asteriskPort}/ws`;
   }
 
   // Get Asterisk AMI URL
