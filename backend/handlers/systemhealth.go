@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -295,21 +296,40 @@ func checkAsteriskHealthRealTime() ServiceInfo {
 
 	// Check AMI connection
 	client := asterisk.GetAMIClient()
-	if client == nil {
-		service.Status = "unhealthy"
-		service.Error = "AMI client not initialized - connection to Asterisk server failed"
-		service.ResponseTime = time.Since(startTime).Milliseconds()
-		service.Details["asterisk_host"] = "172.20.10.5:5038"
-		service.Details["connection_status"] = "failed"
-		return service
-	}
+	asteriskAddr := fmt.Sprintf("%s:%s", config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
+	service.Details["asterisk_host"] = asteriskAddr
 
-	// Check if client is connected
-	if !client.IsConnected() {
-		service.Status = "unhealthy"
-		service.Error = "AMI client not connected"
+	// If AMI client isn't ready, fall back to lightweight port checks.
+	if client == nil || !client.IsConnected() {
+		amiReachable := false
+		if conn, err := net.DialTimeout("tcp", asteriskAddr, 700*time.Millisecond); err == nil {
+			amiReachable = true
+			_ = conn.Close()
+		}
+
+		httpReachable := false
+		httpURL := fmt.Sprintf("http://%s:%s/httpstatus", config.AppConfig.AsteriskHost, config.AppConfig.SIPPort)
+		httpClient := &http.Client{Timeout: 800 * time.Millisecond}
+		if resp, err := httpClient.Get(httpURL); err == nil {
+			httpReachable = true
+			_ = resp.Body.Close()
+		}
+
+		service.Details["ami_reachable"] = amiReachable
+		service.Details["http_reachable"] = httpReachable
 		service.Details["ami_connected"] = false
-		service.Details["last_ping"] = client.GetLastPing().Format(time.RFC3339)
+
+		if amiReachable && httpReachable {
+			service.Status = "healthy"
+			service.Error = "AMI client not initialized yet (ports reachable)"
+		} else if amiReachable || httpReachable {
+			service.Status = "warning"
+			service.Error = "Asterisk partially reachable (check AMI/HTTP configuration)"
+		} else {
+			service.Status = "unhealthy"
+			service.Error = "Asterisk not reachable"
+		}
+
 		service.ResponseTime = time.Since(startTime).Milliseconds()
 		return service
 	}
@@ -347,21 +367,40 @@ func checkAsteriskHealth() ServiceInfo {
 
 	// Check AMI connection
 	client := asterisk.GetAMIClient()
-	if client == nil {
-		service.Status = "unhealthy"
-		service.Error = "AMI client not initialized - connection to Asterisk server failed"
-		service.ResponseTime = time.Since(startTime).Milliseconds()
-		service.Details["asterisk_host"] = "172.20.10.5:5038"
-		service.Details["connection_status"] = "failed"
-		return service
-	}
+	asteriskAddr := fmt.Sprintf("%s:%s", config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
+	service.Details["asterisk_host"] = asteriskAddr
 
-	// Check if client is connected
-	if !client.IsConnected() {
-		service.Status = "unhealthy"
-		service.Error = "AMI client not connected"
+	// If AMI client isn't ready, fall back to lightweight port checks.
+	if client == nil || !client.IsConnected() {
+		amiReachable := false
+		if conn, err := net.DialTimeout("tcp", asteriskAddr, 700*time.Millisecond); err == nil {
+			amiReachable = true
+			_ = conn.Close()
+		}
+
+		httpReachable := false
+		httpURL := fmt.Sprintf("http://%s:%s/httpstatus", config.AppConfig.AsteriskHost, config.AppConfig.SIPPort)
+		httpClient := &http.Client{Timeout: 800 * time.Millisecond}
+		if resp, err := httpClient.Get(httpURL); err == nil {
+			httpReachable = true
+			_ = resp.Body.Close()
+		}
+
+		service.Details["ami_reachable"] = amiReachable
+		service.Details["http_reachable"] = httpReachable
 		service.Details["ami_connected"] = false
-		service.Details["last_ping"] = client.GetLastPing().Format(time.RFC3339)
+
+		if amiReachable && httpReachable {
+			service.Status = "healthy"
+			service.Error = "AMI client not initialized yet (ports reachable)"
+		} else if amiReachable || httpReachable {
+			service.Status = "warning"
+			service.Error = "Asterisk partially reachable (check AMI/HTTP configuration)"
+		} else {
+			service.Status = "unhealthy"
+			service.Error = "Asterisk not reachable"
+		}
+
 		service.ResponseTime = time.Since(startTime).Milliseconds()
 		return service
 	}
