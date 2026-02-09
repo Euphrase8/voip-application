@@ -654,6 +654,8 @@ func testHTTPConnectionWithConfig(asteriskHost, httpPort string) map[string]inte
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	var lastErr error
+	var lastStatus int
+	var lastURL string
 	for _, p := range paths {
 		httpURL := fmt.Sprintf("http://%s:%s%s", asteriskHost, httpPort, p)
 		resp, err := client.Get(httpURL)
@@ -663,22 +665,27 @@ func testHTTPConnectionWithConfig(asteriskHost, httpPort string) map[string]inte
 		}
 		_ = resp.Body.Close()
 
-		// Any HTTP response means the HTTP interface is reachable.
-		if resp.StatusCode > 0 {
-			if resp.StatusCode == 200 {
-				return map[string]interface{}{
-					"success": true,
-					"message": "HTTP interface accessible",
-					"details": fmt.Sprintf("Asterisk HTTP responding on %s", httpURL),
-				}
-			}
-
-			// For diagnostics, treat non-200 as reachable but not fully configured
+		// Prefer a clean 200 from an explicit status endpoint.
+		if resp.StatusCode == 200 {
 			return map[string]interface{}{
-				"success": false,
-				"error":   fmt.Sprintf("HTTP %d", resp.StatusCode),
-				"details": fmt.Sprintf("Asterisk HTTP reachable on %s (status %d)", httpURL, resp.StatusCode),
+				"success": true,
+				"message": "HTTP interface accessible",
+				"details": fmt.Sprintf("Asterisk HTTP responding on %s", httpURL),
 			}
+		}
+
+		// If this path isn't correct (e.g. /asterisk/httpstatus returns 404 when prefix is empty),
+		// continue trying other candidates.
+		lastStatus = resp.StatusCode
+		lastURL = httpURL
+	}
+
+	// If we reached here, either nothing was reachable, or all candidates returned non-200.
+	if lastURL != "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("HTTP %d", lastStatus),
+			"details": fmt.Sprintf("Asterisk HTTP reachable on %s (status %d)", lastURL, lastStatus),
 		}
 	}
 
