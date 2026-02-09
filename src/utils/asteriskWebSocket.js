@@ -121,8 +121,20 @@ export class AsteriskWebSocket {
 
   // Handle WebSocket error
   handleError(evt) {
-    const msg = evt?.message || evt?.type || String(evt);
+    let msg = 'WebSocket error';
+
+    // Browser WS errors are often Event/ProgressEvent objects.
+    if (evt instanceof Error) {
+      msg = evt.message || msg;
+    } else if (evt && typeof evt === 'object') {
+      if (typeof evt.message === 'string' && evt.message) msg = evt.message;
+      else if (typeof evt.type === 'string' && evt.type) msg = `WebSocket ${evt.type}`;
+    } else if (typeof evt === 'string') {
+      msg = evt;
+    }
+
     console.error('[AsteriskWebSocket] WebSocket error:', msg, evt);
+
     // Always emit an Error object to listeners to avoid "[object Event]" crashes.
     this.emit('error', evt instanceof Error ? evt : new Error(msg));
   }
