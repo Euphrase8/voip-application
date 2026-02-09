@@ -15,9 +15,9 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 module.exports = function (app) {
   const target = process.env.REACT_APP_PROXY_TARGET || 'http://192.168.1.2:8080';
 
-  // REST endpoints
+  // REST endpoints (include subpaths)
   app.use(
-    ['/health', '/config', '/api', '/protected'],
+    ['/health', '/config', '/api/**', '/protected/**'],
     createProxyMiddleware({
       target,
       changeOrigin: true,
