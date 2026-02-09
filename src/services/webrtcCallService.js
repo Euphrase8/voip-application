@@ -133,6 +133,12 @@ class WebRTCCallService {
       return;
     }
 
+    // Connection promise so callers can await readiness
+    this._connectPromise = new Promise((resolve, reject) => {
+      this._connectResolve = resolve;
+      this._connectReject = reject;
+    });
+
     // Check if WebSocket is available
     if (!window.WebSocket) {
       console.error('[WebRTCCallService] WebSocket is not supported in this browser');
@@ -154,6 +160,7 @@ class WebRTCCallService {
     this.ws.onopen = () => {
       console.log('[WebRTCCallService] WebSocket connected successfully');
       this.connected = true;
+      this._connectResolve && this._connectResolve(true);
       this.onCallStatusChange && this.onCallStatusChange('Ready');
     };
 
@@ -218,8 +225,26 @@ class WebRTCCallService {
     this.ws.onerror = (error) => {
       console.error('[WebRTCCallService] WebSocket error:', error);
       this.connected = false;
+      this._connectReject && this._connectReject(error);
       this.onCallStatusChange && this.onCallStatusChange('Connection error');
     };
+  }
+
+  // Wait until WebSocket connection is ready
+  async ensureConnected(timeoutMs = 5000) {
+    if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) return true;
+
+    if (!this._connectPromise) {
+      // Not initialized yet
+      throw new Error('WebRTC signaling is not initialized (WebSocket not created)');
+    }
+
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('WebSocket connection timeout')), timeoutMs);
+    });
+
+    await Promise.race([this._connectPromise, timeout]);
+    return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 
   // Handle incoming call invitation

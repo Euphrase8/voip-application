@@ -115,6 +115,14 @@ export const call = async (extension) => {
     console.log('[call.js] DEBUG: API URL:', API_URL);
     console.log('[call.js] DEBUG: Auth headers:', getAuthHeaders());
 
+    // Ensure WebRTC signaling WebSocket is connected BEFORE initiating.
+    // Otherwise callee acceptance cannot be delivered back to caller.
+    if (!webrtcCallService?.connected) {
+      console.log('[call.js] Waiting for WebRTC signaling WebSocket to connect...');
+      await webrtcCallService.ensureConnected(7000);
+      console.log('[call.js] WebRTC signaling WebSocket is connected');
+    }
+
     // First, notify backend about call initiation using WebRTC method
     const { data } = await axios.post(
       `${API_URL}/protected/call/initiate?method=webrtc`,
