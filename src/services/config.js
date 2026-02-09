@@ -18,23 +18,11 @@ class DynamicConfig {
 
   // Get API URL dynamically
   get API_URL() {
-    // In dev, when frontend is served over HTTPS, direct calls to an HTTP backend
-    // will be blocked (mixed content) and/or hit CORS.
-    // Use same-origin URLs and let CRA dev proxy (src/setupProxy.js) forward to backend.
-    if (process.env.NODE_ENV === 'development' && window.location.protocol === 'https:') {
-      return window.location.origin;
-    }
-
     return process.env.REACT_APP_API_URL || configService.getApiUrl();
   }
 
   // Get WebSocket URL dynamically
   get WS_URL() {
-    if (process.env.NODE_ENV === 'development' && window.location.protocol === 'https:') {
-      // Same origin WS, proxied by CRA to backend.
-      return window.location.origin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:') + '/ws';
-    }
-
     return process.env.REACT_APP_WS_URL || configService.getWebSocketUrl();
   }
 
