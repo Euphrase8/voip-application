@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import configService from '../services/configService';
 import ipConfigService from '../services/ipConfigService';
 
+// Material UI icons (professional, no emojis)
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import HourglassTopIcon from '@mui/icons-material/HourglassTop';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CloseIcon from '@mui/icons-material/Close';
+
 const ConnectionStatus = ({ onConfigChange }) => {
   const navigate = useNavigate();
   const [status, setStatus] = useState({
@@ -74,9 +81,9 @@ const ConnectionStatus = ({ onConfigChange }) => {
     return healthy ? 'text-green-500' : 'text-red-500';
   };
 
-  const getStatusIcon = (healthy, checking) => {
-    if (checking) return '⏳';
-    return healthy ? '✅' : '❌';
+  const StatusIcon = ({ healthy, checking }) => {
+    if (checking) return <HourglassTopIcon fontSize="inherit" />;
+    return healthy ? <CheckCircleIcon fontSize="inherit" /> : <ErrorIcon fontSize="inherit" />;
   };
 
   const reloadConfig = async () => {
@@ -95,19 +102,28 @@ const ConnectionStatus = ({ onConfigChange }) => {
   };
 
   if (!showDetails) {
+    const overallHealthy = status.backend.healthy && status.asterisk.healthy;
+    const overallChecking = status.backend.checking || status.asterisk.checking;
+
     return (
       <div className="fixed bottom-4 right-4 z-50">
         <button
           onClick={() => setShowDetails(true)}
-          className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-            status.backend.healthy && status.asterisk.healthy
-              ? 'bg-green-100 text-green-800 hover:bg-green-200'
-              : 'bg-red-100 text-red-800 hover:bg-red-200'
+          className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shadow-sm border ${
+            overallHealthy
+              ? 'bg-green-50 text-green-800 hover:bg-green-100 border-green-200'
+              : 'bg-red-50 text-red-800 hover:bg-red-100 border-red-200'
           }`}
+          aria-label="Open connection status details"
+          title="Open connection status details"
         >
-          {getStatusIcon(status.backend.healthy && status.asterisk.healthy, 
-                        status.backend.checking || status.asterisk.checking)} 
-          Connection Status
+          <span className={`text-base ${getStatusColor(overallHealthy, overallChecking)}`}>
+            <StatusIcon healthy={overallHealthy} checking={overallChecking} />
+          </span>
+          <span>Connection Status</span>
+          <span className="text-gray-500">
+            <ExpandMoreIcon fontSize="inherit" />
+          </span>
         </button>
       </div>
     );
@@ -119,9 +135,11 @@ const ConnectionStatus = ({ onConfigChange }) => {
         <h3 className="font-semibold text-gray-900 dark:text-white">Connection Status</h3>
         <button
           onClick={() => setShowDetails(false)}
-          className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 inline-flex items-center"
+          aria-label="Close connection status"
+          title="Close"
         >
-          ✕
+          <CloseIcon fontSize="small" />
         </button>
       </div>
 
@@ -129,20 +147,22 @@ const ConnectionStatus = ({ onConfigChange }) => {
         {/* Backend Status */}
         <div className="flex items-center justify-between">
           <span className="text-gray-600 dark:text-gray-300">Backend:</span>
-          <span className={getStatusColor(status.backend.healthy, status.backend.checking)}>
-            {getStatusIcon(status.backend.healthy, status.backend.checking)} 
-            {status.backend.checking ? 'Checking...' : 
-             status.backend.healthy ? 'Connected' : 'Disconnected'}
+          <span className={`${getStatusColor(status.backend.healthy, status.backend.checking)} inline-flex items-center gap-1.5`}>
+            <span className="text-sm">
+              <StatusIcon healthy={status.backend.healthy} checking={status.backend.checking} />
+            </span>
+            {status.backend.checking ? 'Checking...' : status.backend.healthy ? 'Connected' : 'Disconnected'}
           </span>
         </div>
 
         {/* Asterisk Status */}
         <div className="flex items-center justify-between">
           <span className="text-gray-600 dark:text-gray-300">Asterisk:</span>
-          <span className={getStatusColor(status.asterisk.healthy, status.asterisk.checking)}>
-            {getStatusIcon(status.asterisk.healthy, status.asterisk.checking)} 
-            {status.asterisk.checking ? 'Checking...' : 
-             status.asterisk.healthy ? 'Configured' : 'Not Available'}
+          <span className={`${getStatusColor(status.asterisk.healthy, status.asterisk.checking)} inline-flex items-center gap-1.5`}>
+            <span className="text-sm">
+              <StatusIcon healthy={status.asterisk.healthy} checking={status.asterisk.checking} />
+            </span>
+            {status.asterisk.checking ? 'Checking...' : status.asterisk.healthy ? 'Configured' : 'Not Available'}
           </span>
         </div>
 
