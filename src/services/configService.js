@@ -174,7 +174,14 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getBackendUrl();
     }
-    return this.get('api_url', 'http://192.168.1.2:8080');
+
+    // Prefer the same host the frontend is served from (works on LAN/mobile).
+    // Fallback to localhost only for local dev.
+    const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    const proto = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+    const defaultHost = (currentHost === 'localhost' || currentHost === '127.0.0.1') ? 'localhost' : currentHost;
+
+    return this.get('api_url', `${proto}//${defaultHost}:8080`);
   }
 
   // Get WebSocket URL
@@ -182,7 +189,13 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getBackendWebSocketUrl();
     }
-    return this.get('ws_url', 'ws://192.168.1.2:8080/ws');
+
+    const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    const proto = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+    const wsProto = proto === 'https:' ? 'wss:' : 'ws:';
+    const defaultHost = (currentHost === 'localhost' || currentHost === '127.0.0.1') ? 'localhost' : currentHost;
+
+    return this.get('ws_url', `${wsProto}//${defaultHost}:8080/ws`);
   }
 
   // Get Asterisk WebSocket URL
@@ -190,6 +203,7 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getAsteriskWebSocketUrl();
     }
+    // Keep the known LAN default for Asterisk, but allow backend-provided config to override.
     return this.get('asterisk.ws_url', 'ws://192.168.1.2:8088/ws');
   }
 

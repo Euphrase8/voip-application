@@ -23,8 +23,12 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
     asterisk: { status: 'untested', message: '' }
   });
 
+  const defaultHost = (typeof window !== 'undefined' && window.location && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
+    ? window.location.hostname
+    : '192.168.1.2';
+
   const [config, setConfig] = useState({
-    backendHost: '192.168.1.2',
+    backendHost: defaultHost,
     backendPort: '8080',
     asteriskHost: '192.168.1.2',
     asteriskPort: '8088',
