@@ -66,22 +66,38 @@ class NotificationService {
     // Override console methods
     console.log = (...args) => {
       originalConsole.log(...args);
-      this.addLog('info', args.join(' '));
+      this.addLog('info', args.map(formatArg).join(' '));
     };
 
     console.warn = (...args) => {
       originalConsole.warn(...args);
-      this.addLog('warning', args.join(' '));
+      this.addLog('warning', args.map(formatArg).join(' '));
+    };
+
+    const formatArg = (a) => {
+      try {
+        if (a instanceof Error) return a.message || String(a);
+        // Browser WS errors are often Event / ProgressEvent
+        if (a && typeof a === 'object' && (a.type || a.target)) {
+          const type = a.type ? String(a.type) : 'event';
+          const target = a.target && a.target.url ? ` ${a.target.url}` : '';
+          return `[${type}]${target}`;
+        }
+        if (typeof a === 'string') return a;
+        return JSON.stringify(a);
+      } catch {
+        return String(a);
+      }
     };
 
     console.error = (...args) => {
       originalConsole.error(...args);
-      this.addLog('error', args.join(' '));
+      this.addLog('error', args.map(formatArg).join(' '));
     };
 
     console.info = (...args) => {
       originalConsole.info(...args);
-      this.addLog('info', args.join(' '));
+      this.addLog('info', args.map(formatArg).join(' '));
     };
   }
 

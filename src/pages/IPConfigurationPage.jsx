@@ -41,7 +41,20 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
     if (existingConfig) {
       try {
         const parsed = JSON.parse(existingConfig);
-        setConfig(prev => ({ ...prev, ...parsed }));
+
+        // Migration: keep Asterisk on the known LAN host by default.
+        // Older configs sometimes pointed to 172.* (old environment).
+        const migrated = {
+          ...parsed,
+          asteriskHost: parsed.asteriskHost && parsed.asteriskHost !== '172.20.10.5' ? parsed.asteriskHost : '192.168.1.2',
+        };
+
+        setConfig(prev => ({ ...prev, ...migrated }));
+
+        // Persist migration silently so other pages use the corrected Asterisk host.
+        if (migrated.asteriskHost !== parsed.asteriskHost) {
+          localStorage.setItem('voipIPConfig', JSON.stringify({ ...parsed, ...migrated }));
+        }
       } catch (error) {
         console.error('Failed to parse existing config:', error);
       }
