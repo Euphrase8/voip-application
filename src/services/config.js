@@ -18,10 +18,12 @@ class DynamicConfig {
 
   // Get API URL dynamically
   get API_URL() {
-    // If the app is served over HTTPS (e.g. behind nginx), avoid mixed-content by using
-    // same-origin API calls and routing via the reverse proxy.
-    if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:') {
-      return window.location.origin;
+    // If the app is served over HTTPS (e.g. behind nginx) or via local IP, avoid mixed-content/cors issues
+    // by using same-origin API calls and routing via the reverse proxy.
+    if (typeof window !== 'undefined' && window.location) {
+      if (window.location.protocol === 'https:' || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
+        return window.location.origin;
+      }
     }
 
     return process.env.REACT_APP_API_URL || configService.getApiUrl();
@@ -29,8 +31,12 @@ class DynamicConfig {
 
   // Get WebSocket URL dynamically
   get WS_URL() {
-    if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:') {
-      return window.location.origin.replace(/^https:/, 'wss:') + '/ws';
+    if (typeof window !== 'undefined' && window.location) {
+      if (window.location.protocol === 'https:') {
+        return window.location.origin.replace(/^https:/, 'wss:') + '/ws';
+      } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        return 'ws://' + window.location.host + '/ws';
+      }
     }
 
     return process.env.REACT_APP_WS_URL || configService.getWebSocketUrl();
@@ -48,6 +54,13 @@ class DynamicConfig {
 
   // Get Asterisk WebSocket URL dynamically
   get SIP_WS_URL() {
+    if (typeof window !== 'undefined' && window.location) {
+      if (window.location.protocol === 'https:') {
+        return window.location.origin.replace(/^https:/, 'wss:') + '/asterisk-ws';
+      } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        return 'ws://' + window.location.host + '/asterisk-ws';
+      }
+    }
     return process.env.REACT_APP_SIP_WS_URL || configService.getAsteriskWebSocketUrl();
   }
 

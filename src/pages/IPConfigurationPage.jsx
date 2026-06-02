@@ -10,7 +10,9 @@ import {
   Loader2,
   Network,
   ArrowRight,
-  AlertTriangle
+  AlertTriangle,
+  Sun,
+  Moon
 } from 'lucide-react';
 import ipConfigService from '../services/ipConfigService';
 
@@ -25,12 +27,18 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
 
   const defaultHost = (typeof window !== 'undefined' && window.location && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
     ? window.location.hostname
-    : '192.168.1.2';
+    : '192.168.1.15';
+
+  const defaultBackendPort = (typeof window !== 'undefined' && window.location && window.location.port)
+    ? window.location.port
+    : (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:')
+      ? '443'
+      : '8080';
 
   const [config, setConfig] = useState({
     backendHost: defaultHost,
-    backendPort: '8080',
-    asteriskHost: '192.168.1.2',
+    backendPort: defaultBackendPort,
+    asteriskHost: '192.168.1.15',
     asteriskPort: '8088',
     asteriskAMIPort: '5038'
   });
@@ -46,7 +54,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
         // Older configs sometimes pointed to 172.* (old environment).
         const migrated = {
           ...parsed,
-          asteriskHost: parsed.asteriskHost && parsed.asteriskHost !== '172.20.10.5' ? parsed.asteriskHost : '192.168.1.2',
+          asteriskHost: parsed.asteriskHost && parsed.asteriskHost !== '172.20.10.5' ? parsed.asteriskHost : '192.168.1.15',
         };
 
         setConfig(prev => ({ ...prev, ...migrated }));
@@ -75,11 +83,14 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
   };
 
   const testBackendConnection = async () => {
-    const backendUrl = `http://${config.backendHost}:${config.backendPort}`;
+    const backendUrl = ipConfigService._resolveBackendUrl(config.backendHost, config.backendPort);
     
     try {
       const response = await fetch(`${backendUrl}/config`, {
         method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        },
         timeout: 5000,
       });
 
@@ -89,7 +100,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
           return { status: 'success', message: 'Backend connection successful' };
         }
       }
-      return { status: 'error', message: 'Backend responded but config endpoint failed' };
+      return { status: 'error', message: `Backend responded but config endpoint failed (HTTP ${response.status})` };
     } catch (error) {
       return { 
         status: 'error', 
@@ -378,7 +389,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
                 <label className={`block text-xs xs:text-sm font-medium mb-1 xs:mb-2 ${
                   darkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
-                  SIP Port
+                  SIP WebSocket Port
                 </label>
                 <input
                   type="text"
@@ -478,14 +489,20 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
           <div className="flex justify-center pt-3 xs:pt-4">
             <button
               onClick={toggleDarkMode}
-              className={`px-3 xs:px-4 py-2 rounded-lg text-xs xs:text-sm font-medium transition-colors touch-target tap-highlight ${
+              className={`p-3 rounded-full transition-colors touch-target tap-highlight shadow-md ${
                 darkMode
-                  ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  ? 'bg-gray-700 text-yellow-400 hover:bg-gray-600 border border-gray-600'
+                  : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
               }`}
-              style={{ minHeight: '44px' }}
+              title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              style={{ minHeight: '44px', minWidth: '44px' }}
             >
-              {darkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+              {darkMode ? (
+                <Sun className="w-5 h-5 animate-[spin_10s_linear_infinite]" />
+              ) : (
+                <Moon className="w-5 h-5 text-indigo-600" />
+              )}
             </button>
           </div>
         </div>

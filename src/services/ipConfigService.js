@@ -69,22 +69,59 @@ class IPConfigService {
     console.log('[IPConfigService] Configuration reset');
   }
 
+  // Helper to resolve backend URL with correct protocol (HTTPS if page is HTTPS)
+  _resolveBackendUrl(host, port) {
+    if (!host) return '';
+    
+    // If host already contains protocol, return it
+    if (host.startsWith('http://') || host.startsWith('https://')) {
+      return host;
+    }
+    
+    const isHttps = typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
+    const proto = isHttps ? 'https' : 'http';
+    
+    // Default ports to omit (standard HTTP/HTTPS)
+    const isDefaultPort = port === '80' || port === '443' || !port;
+    const portStr = isDefaultPort ? '' : `:${port}`;
+    
+    return `${proto}://${host}${portStr}`;
+  }
+
   // Get backend URL
   getBackendUrl() {
     const config = this.getConfig();
-    return `http://${config.backendHost}:${config.backendPort}`;
+    return this._resolveBackendUrl(config.backendHost, config.backendPort);
   }
 
   // Get backend WebSocket URL
   getBackendWebSocketUrl() {
     const config = this.getConfig();
-    return `ws://${config.backendHost}:${config.backendPort}/ws`;
+    const backendUrl = this.getBackendUrl();
+    try {
+      const url = new URL(backendUrl);
+      const wsProto = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${wsProto}//${url.host}/ws`;
+    } catch (e) {
+      const wsProto = typeof window !== 'undefined' && window.location && window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const portStr = (config.backendPort === '80' || config.backendPort === '443' || !config.backendPort) ? '' : `:${config.backendPort}`;
+      return `${wsProto}://${config.backendHost}${portStr}/ws`;
+    }
   }
 
   // Get Asterisk WebSocket URL
   getAsteriskWebSocketUrl() {
     const config = this.getConfig();
-    return `ws://${config.asteriskHost}:${config.asteriskPort}/ws`;
+    
+    // If the host already starts with ws:// or wss://, use it
+    if (config.asteriskHost.startsWith('ws://') || config.asteriskHost.startsWith('wss://')) {
+      return config.asteriskHost;
+    }
+    
+    const isHttps = typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
+    const proto = isHttps ? 'wss' : 'ws';
+    const portStr = (config.asteriskPort === '80' || config.asteriskPort === '443' || !config.asteriskPort) ? '' : `:${config.asteriskPort}`;
+    return `${proto}://${config.asteriskHost}${portStr}/ws`;
   }
 
   // Get Asterisk AMI URL
@@ -108,7 +145,7 @@ class IPConfigService {
   // Test backend connection
   async testBackendConnection(config = null) {
     const testConfig = config || this.getConfig();
-    const backendUrl = `http://${testConfig.backendHost}:${testConfig.backendPort}`;
+    const backendUrl = this._resolveBackendUrl(testConfig.backendHost, testConfig.backendPort);
     
     try {
       const controller = new AbortController();
@@ -159,7 +196,7 @@ class IPConfigService {
 
     try {
       // Test through backend API instead of direct connection
-      const backendUrl = `http://${testConfig.backendHost}:${testConfig.backendPort}`;
+      const backendUrl = this._resolveBackendUrl(testConfig.backendHost, testConfig.backendPort);
 
       // Get auth token from localStorage (optional for initial configuration)
       const token = localStorage.getItem('token');
