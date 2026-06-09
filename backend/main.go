@@ -178,6 +178,7 @@ func main() {
 		protected.POST("/logout", handlers.Logout)
 		protected.PUT("/status", handlers.UpdateUserStatus)
 		protected.POST("/heartbeat", handlers.HeartbeatUser)
+		protected.GET("/users", handlers.GetAllUsers)
 		protected.GET("/users/online", handlers.GetOnlineUsers)
 		protected.GET("/users/:extension", handlers.GetUserByExtension)
 		protected.GET("/extensions/connected", handlers.GetConnectedExtensions)
@@ -192,6 +193,42 @@ func main() {
 			callRoutes.GET("/active", handlers.GetActiveCalls)
 			callRoutes.GET("/logs", handlers.GetCallLogs)
 		}
+
+		// Chat Message routes
+		chatRoutes := protected.Group("/messages")
+		{
+			chatRoutes.POST("/send", handlers.SendMessage)
+			chatRoutes.GET("/conversations", handlers.GetConversations)
+			chatRoutes.GET("/unread-count", handlers.GetUnreadCount)
+			chatRoutes.GET("/:userId", handlers.GetMessages)
+			chatRoutes.PUT("/read/:senderId", handlers.MarkAsRead)
+
+			// Group chat
+			chatRoutes.POST("/group/create", handlers.CreateGroup)
+			chatRoutes.POST("/group/send", handlers.SendGroupMessage)
+			chatRoutes.GET("/group/:groupId/messages", handlers.GetGroupMessages)
+			chatRoutes.GET("/groups", handlers.GetUserGroups)
+		}
+
+		// Voicemail routes
+		voicemailRoutes := protected.Group("/voicemail")
+		{
+			voicemailRoutes.POST("/create", handlers.CreateVoicemail)
+			voicemailRoutes.GET("/list", handlers.GetVoicemails)
+			voicemailRoutes.GET("/unread-count", handlers.GetVoicemailUnreadCount)
+			voicemailRoutes.GET("/:id", handlers.GetVoicemail)
+			voicemailRoutes.PUT("/:id/read", handlers.MarkVoicemailRead)
+			voicemailRoutes.DELETE("/:id", handlers.DeleteVoicemail)
+			voicemailRoutes.GET("/:id/audio", handlers.GetVoicemailAudio)
+		}
+
+		// Missed calls
+		protected.POST("/missed-calls/record", handlers.RecordMissedCall)
+		protected.GET("/missed-calls", handlers.GetMissedCalls)
+
+		// Voicemail greeting
+		protected.POST("/voicemail-greeting", handlers.UploadVoicemailGreeting)
+		protected.GET("/voicemail-greeting/play", handlers.GetVoicemailGreeting)
 
 		// Diagnostic routes
 		protected.GET("/diagnostics", handlers.GetSystemDiagnostics)

@@ -73,6 +73,27 @@ func GetOnlineUsers(c *gin.Context) {
 	})
 }
 
+// GetAllUsers returns all users (accessible to all authenticated users)
+func GetAllUsers(c *gin.Context) {
+	var users []models.User
+	if err := database.GetDB().Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to fetch users",
+		})
+		return
+	}
+
+	var userResponses []models.UserResponse
+	for _, user := range users {
+		userResponses = append(userResponses, user.ToResponse())
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"users":   userResponses,
+	})
+}
+
 // GetUserByExtension returns user information by extension
 func GetUserByExtension(c *gin.Context) {
 	extension := c.Param("extension")

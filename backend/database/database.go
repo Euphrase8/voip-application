@@ -41,6 +41,14 @@ func InitDatabase() {
 		&models.User{},
 		&models.CallLog{},
 		&models.ActiveCall{},
+		&models.Message{},
+		&models.ChatConversation{},
+		&models.ChatGroup{},
+		&models.ChatGroupMember{},
+		&models.ChatGroupMessage{},
+		&models.Voicemail{},
+		&models.VoicemailGreeting{},
+		&models.MissedCall{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)

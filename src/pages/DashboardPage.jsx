@@ -9,8 +9,9 @@ import {
   FiGrid as Grid,
   FiLogOut as LogOut,
   FiBell as Bell,
-
+  FiMessageSquare as Chat,
 } from "react-icons/fi";
+import { Voicemail as VoicemailIcon, Smartphone } from 'lucide-react';
 import HomePage from "./HomePage";
 import SettingsPage from "./SettingsPage";
 import ContactsPage from "./ContactsPage";
@@ -19,7 +20,11 @@ import CallingPage from "./CallingPage";
 import IncomingCallPage from "./IncomingCallPage";
 import SettingsModal from "../components/SettingsModal";
 import NotificationsPage from "./NotificationsPage";
+import ChatPage from "./ChatPage";
+import VoicemailPage from "./VoicemailPage";
+import SoftphoneGuidePage from "./SoftphoneGuidePage";
 import statusService from "../services/statusService";
+import { getVoicemailUnreadCount } from "../services/voicemail";
 
 import { call, hangupCall } from "../services/call";
 import webrtcCallService from "../services/webrtcCallService";
@@ -67,8 +72,8 @@ const initialContacts = [
 const BottomNav = ({ currentPage, onNavigate, isDarkMode }) => {
   const navItems = [
     { id: "keypad", label: "Keypad", icon: Phone },
-    { id: "settings", label: "Settings", icon: Settings },
     { id: "contacts", label: "Contacts", icon: Users },
+    { id: "chat", label: "Chat", icon: Chat },
     { id: "calllogs", label: "Call Logs", icon: Clock },
     { id: "notifications", label: "Notifications", icon: Bell },
   ];
@@ -130,6 +135,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
 
 
   const [unreadCount, setUnreadCount] = useState(0);
+  const [voicemailUnread, setVoicemailUnread] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -165,6 +171,19 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
       alert(`Status service test failed: ${result.error}. Check console for details.`);
     }
   };
+
+  // Load voicemail unread count
+  useEffect(() => {
+    const loadVMUnread = async () => {
+      try {
+        const data = await getVoicemailUnreadCount();
+        if (data.success) setVoicemailUnread(data.unread_count);
+      } catch (e) {}
+    };
+    loadVMUnread();
+    const interval = setInterval(loadVMUnread, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Initialize status service for online/offline tracking
   useEffect(() => {
@@ -237,14 +256,22 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   }, [user?.extension]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setContacts((prev) =>
-        prev.map((contact) => ({
-          ...contact,
-          status: Math.random() > 0.5 ? "online" : "offline",
-        }))
-      );
-    }, 10000);
+    const fetchUserStatuses = async () => {
+      try {
+        const data = await (await import("../services/users")).getUsers();
+        if (data.length > 0) {
+          setContacts((prev) =>
+            prev.map((contact) => ({
+              ...contact,
+              status: data.find((u) => u.extension === contact.extension)?.status || contact.status,
+            }))
+          );
+        }
+      } catch (e) {}
+    };
+
+    fetchUserStatuses();
+    const interval = setInterval(fetchUserStatuses, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -528,7 +555,10 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                   { id: "keypad", label: "Keypad", icon: Grid },
                   { id: "settings", label: "Settings", icon: Settings },
                   { id: "contacts", label: "Contacts", icon: Users },
+                  { id: "chat", label: "Messages", icon: Chat },
+                  { id: "voicemail", label: "Voicemail", icon: VoicemailIcon, badge: voicemailUnread },
                   { id: "calllogs", label: "Call Logs", icon: Clock },
+                  { id: "softphone", label: "Softphone", icon: Smartphone },
                   { id: "notifications", label: "Notifications", icon: Bell },
                 ].map((item) => {
                   const Icon = item.icon;
@@ -554,7 +584,12 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       )}
                     >
                       <Icon className="w-5 h-5 flex-shrink-0" />
-                      <ResponsiveText variant="bodyMedium" className="font-medium">{item.label}</ResponsiveText>
+                      <ResponsiveText variant="bodyMedium" className="font-medium flex-1">{item.label}</ResponsiveText>
+                      {item.badge !== undefined && item.badge > 0 && (
+                        <span className="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[18px] text-center">
+                          {item.badge}
+                        </span>
+                      )}
                     </motion.button>
                   );
                 })}
@@ -805,6 +840,36 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                         : "bg-white"
                     )}>
                       <CallLogsPage darkMode={isDarkMode} user={user} onCall={(extension) => startCall({ extension, name: `Extension ${extension}` })} />
+                    </div>
+                  </div>
+                )}
+                {currentPage === "chat" && (
+                  <div className="h-full flex flex-col">
+                    <div className={cn(
+                      "flex-1 overflow-hidden rounded-xl",
+                      darkMode ? "bg-secondary-800" : "bg-white"
+                    )}>
+                      <ChatPage darkMode={isDarkMode} currentUser={user} />
+                    </div>
+                  </div>
+                )}
+                {currentPage === "voicemail" && (
+                  <div className="h-full flex flex-col">
+                    <div className={cn(
+                      "flex-1 overflow-hidden rounded-xl",
+                      darkMode ? "bg-secondary-800" : "bg-white"
+                    )}>
+                      <VoicemailPage darkMode={isDarkMode} />
+                    </div>
+                  </div>
+                )}
+                {currentPage === "softphone" && (
+                  <div className="h-full flex flex-col">
+                    <div className={cn(
+                      "flex-1 overflow-hidden rounded-xl",
+                      darkMode ? "bg-secondary-800" : "bg-white"
+                    )}>
+                      <SoftphoneGuidePage darkMode={isDarkMode} />
                     </div>
                   </div>
                 )}

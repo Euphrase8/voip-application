@@ -8,49 +8,29 @@ const WS_URL = CONFIG.WS_URL;
 export const getUsers = async () => {
   try {
     const token = getToken();
-    const response = await axios.get(`${API_URL}/protected/users/online`, {
+    const response = await axios.get(`${API_URL}/protected/users`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
     });
 
-    // Handle different response formats
-    let users = [];
-    if (response.data.extensions) {
-      // If extensions are provided as array of strings
-      users = response.data.extensions.map((name, index) => ({
-        id: index + 1,
-        name,
-        extension: `100${index + 1}`, // Use 4-digit extensions starting from 1001
-        priority: index === 0 ? 'high' : index === 1 ? 'medium' : 'low',
-        status: 'online',
-        avatar: null,
+    if (response.data.success && response.data.users) {
+      return response.data.users.map(u => ({
+        id: u.id,
+        username: u.username,
+        extension: u.extension,
+        status: u.status || 'offline',
+        is_online: u.is_online,
+        role: u.role,
       }));
-    } else if (response.data.users) {
-      // If users are provided as objects with extension info
-      users = response.data.users.map((user, index) => ({
-        id: user.id || index + 1,
-        name: user.name || user.username || `User ${user.extension}`,
-        extension: user.extension,
-        priority: user.priority || (index === 0 ? 'high' : index === 1 ? 'medium' : 'low'),
-        status: user.status || 'online',
-        avatar: user.avatar || null,
-      }));
-    } else {
-      console.warn('[users.js] Unexpected response format:', response.data);
-      return [];
     }
-
-    return users;
+    return [];
   } catch (error) {
     console.error('[users.js] Error fetching users:', error);
     if (error.response) {
       const { status } = error.response;
-      if (status === 401) {
-        throw new Error('Invalid JWT');
-      } else if (status === 403) {
-        throw new Error('Non-admin user');
-      }
+      if (status === 401) throw new Error('Invalid JWT');
+      else if (status === 403) throw new Error('Non-admin user');
     }
     throw new Error('Failed to fetch users');
   }

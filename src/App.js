@@ -152,6 +152,7 @@ const App = () => {
       localStorage.setItem('extension', result.user?.extension);
       localStorage.setItem('sipPassword', `password${result.user?.extension}`);
       localStorage.setItem('userRole', result.user?.role || 'user');
+      localStorage.setItem('user_id', result.user?.id?.toString() || '');
       const extension = result.user?.extension;
       const role = result.user?.role || 'user';
       console.log('[App.js] Login successful, setting user:', {

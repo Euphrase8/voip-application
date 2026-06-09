@@ -1,8 +1,10 @@
 package websocket
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"log"
+	"math/big"
 	"net/http"
 	"time"
 
@@ -21,7 +23,7 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 
 	// Maximum message size allowed from peer
-	maxMessageSize = 512
+	maxMessageSize = 32768
 )
 
 var upgrader = websocket.Upgrader{
@@ -247,6 +249,29 @@ func (c *Client) handleMessage(msg Message) {
 			c.hub.SendToExtension(msg.To, msg)
 		}
 
+	// Chat message types
+	case "chat_message":
+		if msg.To != "" {
+			c.hub.SendToExtension(msg.To, msg)
+		}
+
+	case "chat_typing":
+		if msg.To != "" {
+			typingMsg := Message{
+				Type:      "chat_typing",
+				From:      c.Extension,
+				To:        msg.To,
+				Data:      msg.Data,
+				Timestamp: time.Now().Unix(),
+			}
+			c.hub.SendToExtension(msg.To, typingMsg)
+		}
+
+	case "chat_read":
+		if msg.To != "" {
+			c.hub.SendToExtension(msg.To, msg)
+		}
+
 	default:
 		log.Printf("Unknown message type: %s", msg.Type)
 	}
@@ -296,12 +321,17 @@ func generateClientID() string {
 	return time.Now().Format("20060102150405") + "-" + randomString(6)
 }
 
-// randomString generates a random string of specified length
+// randomString generates a cryptographically secure random string
 func randomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, length)
 	for i := range b {
-		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			b[i] = 'a'
+			continue
+		}
+		b[i] = charset[n.Int64()]
 	}
 	return string(b)
 }
