@@ -23,6 +23,7 @@ import NotificationsPage from "./NotificationsPage";
 import ChatPage from "./ChatPage";
 import VoicemailPage from "./VoicemailPage";
 import SoftphoneGuidePage from "./SoftphoneGuidePage";
+import ConferencePage from "./ConferencePage";
 import statusService from "../services/statusService";
 import { getVoicemailUnreadCount } from "../services/voicemail";
 
@@ -558,6 +559,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                   { id: "chat", label: "Messages", icon: Chat },
                   { id: "voicemail", label: "Voicemail", icon: VoicemailIcon, badge: voicemailUnread },
                   { id: "calllogs", label: "Call Logs", icon: Clock },
+                  { id: "conference", label: "Conference", icon: Users },
                   { id: "softphone", label: "Softphone", icon: Smartphone },
                   { id: "notifications", label: "Notifications", icon: Bell },
                 ].map((item) => {
@@ -860,6 +862,16 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       darkMode ? "bg-secondary-800" : "bg-white"
                     )}>
                       <VoicemailPage darkMode={isDarkMode} />
+                    </div>
+                  </div>
+                )}
+                {currentPage === "conference" && (
+                  <div className="h-full flex flex-col">
+                    <div className={cn(
+                      "flex-1 overflow-hidden rounded-xl",
+                      darkMode ? "bg-secondary-800" : "bg-white"
+                    )}>
+                      <ConferencePage darkMode={isDarkMode} onStartCall={(contact) => startCall(contact)} />
                     </div>
                   </div>
                 )}

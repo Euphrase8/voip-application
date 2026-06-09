@@ -230,6 +230,17 @@ func main() {
 		protected.POST("/voicemail-greeting", handlers.UploadVoicemailGreeting)
 		protected.GET("/voicemail-greeting/play", handlers.GetVoicemailGreeting)
 
+		// Conference routes
+		conferenceRoutes := protected.Group("/conference")
+		{
+			conferenceRoutes.POST("/create", handlers.CreateConference)
+			conferenceRoutes.GET("/list", handlers.ListConferences)
+			conferenceRoutes.GET("/:id", handlers.GetConference)
+			conferenceRoutes.POST("/join", handlers.JoinConference)
+			conferenceRoutes.POST("/:id/leave", handlers.LeaveConference)
+			conferenceRoutes.POST("/:id/end", handlers.EndConference)
+		}
+
 		// Diagnostic routes
 		protected.GET("/diagnostics", handlers.GetSystemDiagnostics)
 		protected.GET("/test-asterisk", handlers.TestAsteriskConnections)
