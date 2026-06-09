@@ -132,6 +132,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   const [currentPage, setCurrentPage] = useState("keypad");
   const [notification, setNotification] = useState(null);
   const [incomingCall, setLocalIncomingCall] = useState(null);
+  const [incomingCallAcceptedData, setIncomingCallAcceptedData] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
 
 
@@ -295,7 +296,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     try {
       setCallStatus(`Initiating call to ${contact.name}...`);
 
-      // Add notification for call attempt
       notificationService.addNotification(
         'info',
         'Initiating Call',
@@ -304,27 +304,12 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
 
       const { channel } = await call(contact.extension);
       setCallStatus("Connected");
-
-      // Add notification for successful connection
       notificationService.callConnected(contact.extension);
 
       setCurrentPage("calling");
-      navigate("/calling", {
-        state: {
-          contact,
-          callStatus: "Connecting...",
-          isOutgoing: true,
-          channel,
-          callAccepted: false,
-          isWebRTCCall: channel && channel.startsWith('webrtc-call-'),
-          callId: channel
-        },
-      });
     } catch (error) {
       console.error("[Dashboard] Call error:", error);
       setCallStatus("Call failed");
-
-      // Add notification for call failure
       notificationService.callFailed(contact.extension, error.message);
 
       setTimeout(() => {
@@ -333,6 +318,17 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
         setCurrentPage("keypad");
       }, 2000);
     }
+  };
+
+  const handleIncomingCallAccepted = async (acceptedData) => {
+    setLocalIncomingCall(null);
+    if (setIncomingCall) setIncomingCall(null);
+    setIncomingCallAcceptedData(acceptedData);
+    if (acceptedData.contact) {
+      setActiveCallContact(acceptedData.contact);
+    }
+    setCallStatus('Initializing Communication');
+    setCurrentPage("calling");
   };
 
   const endCall = async () => {
@@ -356,8 +352,8 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     }
     setCallStatus(null);
     setActiveCallContact(null);
+    setIncomingCallAcceptedData(null);
     setCurrentPage("keypad");
-    navigate("/dashboard");
   };
 
 
@@ -407,6 +403,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
             setLocalIncomingCall(null);
             if (setIncomingCall) setIncomingCall(null);
           }}
+          onSwitchToCallPage={handleIncomingCallAccepted}
         />
       )}
 
@@ -935,8 +932,12 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                     contact={activeCallContact}
                     callStatus={callStatus}
                     onEndCall={endCall}
-                    channel={`PJSIP/${activeCallContact.extension}`}
+                    channel={incomingCallAcceptedData?.channel || `PJSIP/${activeCallContact.extension}`}
                     darkMode={isDarkMode}
+                    isOutgoing={!incomingCallAcceptedData}
+                    callAccepted={!!incomingCallAcceptedData}
+                    isWebRTCCall={!!incomingCallAcceptedData?.isWebRTCCall}
+                    callId={incomingCallAcceptedData?.callId}
                   />
                 )}
               </motion.div>

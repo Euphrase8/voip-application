@@ -197,11 +197,15 @@ class AudioManager {
   setMute(muted) {
     this.settings.isMuted = muted;
     
-    if (this.localStream) {
+    if (this.localStream && this.localStream.active) {
       const audioTracks = this.localStream.getAudioTracks();
       audioTracks.forEach(track => {
         track.enabled = !muted;
       });
+    } else if (this.localStream) {
+      console.warn('[AudioManager] Local stream exists but is inactive, cannot toggle mute');
+    } else {
+      console.warn('[AudioManager] No local stream available, mute state saved for later');
     }
     
     console.log('[AudioManager] Microphone', muted ? 'muted' : 'enabled');

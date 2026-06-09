@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
 import { Avatar, Tooltip, Button } from "@mui/material";
 import { Call, CallEnd } from "@mui/icons-material";
 import { sendWebSocketMessage } from "../services/websocketservice";
 import { hangup } from "../services/hang";
 import webrtcCallService from "../services/webrtcCallService";
 
-const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAccepted, onCallRejected }) => {
-  const navigate = useNavigate();
+const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAccepted, onCallRejected, onSwitchToCallPage }) => {
   const [notification, setNotification] = useState(null);
   const [timeLeft, setTimeLeft] = useState(30);
   const [isLoading, setIsLoading] = useState(false);
@@ -73,9 +71,8 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
             await webrtcCallService.acceptCall();
             setConnectionStatus('Call accepted! Initializing communication...');
 
-            // Navigate immediately to calling page with "Connecting" status
-            navigate("/calling", {
-              state: {
+            if (onSwitchToCallPage) {
+              onSwitchToCallPage({
                 contact: caller,
                 callStatus: "Initializing Communication",
                 isOutgoing: false,
@@ -84,8 +81,8 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
                 callAccepted: true,
                 isWebRTCCall: true,
                 callId: callData?.call_id
-              },
-            });
+              });
+            }
           } else {
             // For traditional SIP calls, send answer_call message
             console.log('[IncomingCallPage] Accepting SIP call via WebSocket');
@@ -101,9 +98,8 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
 
             setConnectionStatus('Call accepted! Connecting...');
 
-            // Navigate to calling page with "Connecting" status
-            navigate("/calling", {
-              state: {
+            if (onSwitchToCallPage) {
+              onSwitchToCallPage({
                 contact: caller,
                 callStatus: "Connecting",
                 isOutgoing: false,
@@ -111,8 +107,8 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
                 transport: callData?.transport || "transport-ws",
                 callAccepted: true,
                 isWebRTCCall: false
-              },
-            });
+              });
+            }
           }
 
           // Notify parent component that call was accepted (after navigation to avoid state update during render)
@@ -204,7 +200,7 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
         clearInterval(timerRef.current);
       }
     };
-  }, [callData, user, navigate, caller]);
+  }, [callData, user, caller]);
 
   const handleAccept = async () => {
     if (!callHandlerRef.current) return;

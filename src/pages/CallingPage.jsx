@@ -9,7 +9,9 @@ import {
   FiVolume2 as Volume,
   FiVolumeX as VolumeOff,
   FiUser as User,
-  FiClock as Clock
+  FiClock as Clock,
+  FiPause as Pause,
+  FiPlay as Play
 } from 'react-icons/fi';
 import PropTypes from 'prop-types';
 import webrtcCallService from '../services/webrtcCallService';
@@ -29,7 +31,10 @@ const CallingPage = ({
   isOutgoing: propIsOutgoing,
   channel: propChannel,
   transport: propTransport,
-  onEndCall
+  onEndCall,
+  callAccepted: propCallAccepted,
+  isWebRTCCall: propIsWebRTCCall,
+  callId: propCallId
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -41,9 +46,9 @@ const CallingPage = ({
   const isOutgoing = navigationState.isOutgoing !== undefined ? navigationState.isOutgoing : (propIsOutgoing !== undefined ? propIsOutgoing : true);
   const initialChannel = navigationState.channel || propChannel;
   // const transport = navigationState.transport || propTransport; // Currently unused
-  const callAccepted = navigationState.callAccepted || false;
-  const isWebRTCCall = navigationState.isWebRTCCall || false;
-  const callId = navigationState.callId;
+  const callAccepted = navigationState.callAccepted !== undefined ? navigationState.callAccepted : (propCallAccepted !== undefined ? propCallAccepted : false);
+  const isWebRTCCall = navigationState.isWebRTCCall !== undefined ? navigationState.isWebRTCCall : (propIsWebRTCCall !== undefined ? propIsWebRTCCall : false);
+  const callId = navigationState.callId || propCallId;
 
   const [callTime, setCallTime] = useState(0);
   const [currentCallStatus, setCurrentCallStatus] = useState(initialCallStatus || 'Connecting...');
@@ -51,6 +56,7 @@ const CallingPage = ({
   const [notification, setNotification] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const [isOnHold, setIsOnHold] = useState(false);
   // const [wsConnected, setWsConnected] = useState(false); // Currently unused
   const [channel] = useState(initialChannel); // setChannel removed as unused
   const callStartTimeRef = useRef(null);
@@ -154,6 +160,32 @@ const CallingPage = ({
     } catch (error) {
       console.error('[CallingPage] Failed to toggle speaker:', error);
       setNotification({ message: 'Failed to toggle speaker', type: 'error' });
+      setTimeout(() => setNotification(null), 3000);
+    }
+  };
+
+  // Handle hold toggle
+  const handleHoldToggle = () => {
+    try {
+      const newHoldState = !isOnHold;
+      setIsOnHold(newHoldState);
+
+      if (newHoldState) {
+        webrtcCallService.setMute(true);
+        setCurrentCallStatus('On Hold');
+      } else {
+        webrtcCallService.setMute(false);
+        setCurrentCallStatus('Connected');
+      }
+
+      setNotification({
+        message: newHoldState ? 'Call on hold' : 'Call resumed',
+        type: 'info'
+      });
+      setTimeout(() => setNotification(null), 2000);
+    } catch (error) {
+      console.error('[CallingPage] Failed to toggle hold:', error);
+      setNotification({ message: 'Failed to toggle hold', type: 'error' });
       setTimeout(() => setNotification(null), 3000);
     }
   };
@@ -460,6 +492,29 @@ const CallingPage = ({
               }
             </button>
 
+            {/* Hold Button - Enhanced Mobile */}
+            <button
+              onClick={handleHoldToggle}
+              className={cn(
+                'p-2.5 sm:p-3 md:p-4 rounded-xl sm:rounded-2xl',
+                'transition-all duration-200 shadow-lg border-2',
+                'active:scale-95 sm:hover:scale-105',
+                'min-w-[44px] min-h-[44px] sm:min-w-[48px] sm:min-h-[48px]',
+                'flex items-center justify-center',
+                isOnHold
+                  ? 'bg-yellow-500 border-yellow-400 text-white active:bg-yellow-600 sm:hover:bg-yellow-600'
+                  : darkMode
+                  ? 'bg-slate-700 border-slate-600 text-slate-300 active:bg-slate-600 sm:hover:bg-slate-600'
+                  : 'bg-slate-100 border-slate-200 text-slate-600 active:bg-slate-200 sm:hover:bg-slate-200'
+              )}
+              aria-label={isOnHold ? 'Resume call' : 'Hold call'}
+            >
+              {isOnHold ?
+                <Play className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" /> :
+                <Pause className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" />
+              }
+            </button>
+
             {/* Speaker Button - Enhanced Mobile */}
             <button
               onClick={handleSpeakerToggle}
@@ -676,7 +731,10 @@ CallingPage.propTypes = {
   isOutgoing: PropTypes.bool,
   channel: PropTypes.string,
   transport: PropTypes.string,
-  onEndCall: PropTypes.func
+  onEndCall: PropTypes.func,
+  callAccepted: PropTypes.bool,
+  isWebRTCCall: PropTypes.bool,
+  callId: PropTypes.string
 };
 
 export default CallingPage;

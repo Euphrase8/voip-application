@@ -10,7 +10,7 @@ import DashboardPage from './pages/DashboardPage';
 import AdminDashboard from './pages/AdminDashboard';
 import ContactsPage from './pages/ContactsPage';
 import CallLogsPage from './pages/CallLogsPage';
-import CallingPage from './pages/CallingPage';
+
 import WebRTCTestPage from './pages/WebRTCTestPage';
 import IPConfigurationPage from './pages/IPConfigurationPage';
 import Loader from './components/loader';
@@ -321,9 +321,7 @@ const App = () => {
         />
         <Route
           path="/calling"
-          element={token ? <CallingPage
-            darkMode={darkMode}
-          /> : <Navigate to="/login" replace />}
+          element={<Navigate to="/dashboard" replace />}
         />
         <Route
           path="/webrtc-test"
