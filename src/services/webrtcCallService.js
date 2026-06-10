@@ -133,6 +133,12 @@ class WebRTCCallService {
       return;
     }
 
+    // Avoid duplicate WebSocket creation
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      console.log('[WebRTCCallService] WebSocket already open or connecting, skipping duplicate');
+      return;
+    }
+
     // Connection promise so callers can await readiness
     this._connectPromise = new Promise((resolve, reject) => {
       this._connectResolve = resolve;
@@ -222,8 +228,9 @@ class WebRTCCallService {
       this.onCallStatusChange && this.onCallStatusChange('Disconnected');
     };
 
-    this.ws.onerror = (error) => {
-      console.error('[WebRTCCallService] WebSocket error:', error);
+    this.ws.onerror = (event) => {
+      const error = new Error('WebSocket connection failed');
+      console.error('[WebRTCCallService] WebSocket error:', error.message, event);
       this.connected = false;
       this._connectReject && this._connectReject(error);
       this.onCallStatusChange && this.onCallStatusChange('Connection error');
@@ -235,7 +242,6 @@ class WebRTCCallService {
     if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) return true;
 
     if (!this._connectPromise) {
-      // Not initialized yet
       throw new Error('WebRTC signaling is not initialized (WebSocket not created)');
     }
 
@@ -243,7 +249,15 @@ class WebRTCCallService {
       setTimeout(() => reject(new Error('WebSocket connection timeout')), timeoutMs);
     });
 
-    await Promise.race([this._connectPromise, timeout]);
+    try {
+      await Promise.race([this._connectPromise, timeout]);
+    } catch (err) {
+      // DOM Event objects don't have .message — wrap in a real Error
+      if (err && typeof err === 'object' && !(err instanceof Error)) {
+        throw new Error('WebSocket connection failed');
+      }
+      throw err;
+    }
     return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 

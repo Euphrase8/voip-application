@@ -130,7 +130,7 @@ class ConfigService {
       backendHost = (currentHost === 'localhost' || currentHost === '127.0.0.1')
         ? 'localhost'
         : currentHost;
-      asteriskHost = '192.168.1.2';
+      asteriskHost = 'localhost';
     }
 
     return {
@@ -204,7 +204,7 @@ class ConfigService {
       return ipConfigService.getAsteriskWebSocketUrl();
     }
     // Keep the known LAN default for Asterisk, but allow backend-provided config to override.
-    return this.get('asterisk.ws_url', 'ws://192.168.1.2:8088/ws');
+    return this.get('asterisk.ws_url', 'ws://localhost:8088/ws');
   }
 
   // Get Asterisk Host
@@ -212,7 +212,7 @@ class ConfigService {
     if (ipConfigService.isConfigured()) {
       return ipConfigService.getAsteriskHost();
     }
-    return this.get('asterisk.host', '192.168.1.2');
+    return this.get('asterisk.host', 'localhost');
   }
 
 

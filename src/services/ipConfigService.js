@@ -6,11 +6,11 @@ class IPConfigService {
     this.CONFIG_KEY = 'voipIPConfig';
     this.CONFIGURED_KEY = 'voipConfigured';
     this.defaultConfig = {
-      // Default to LAN IP so the app works from your phone too.
+      // Default to localhost so the app works out of the box in dev.
       // You can change this in the IP Configuration page.
-      backendHost: '192.168.1.2',
+      backendHost: 'localhost',
       backendPort: '8080',
-      asteriskHost: '192.168.1.2',
+      asteriskHost: 'localhost',
       asteriskPort: '8088',
       asteriskAMIPort: '5038'
     };

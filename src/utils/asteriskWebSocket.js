@@ -4,7 +4,7 @@
 export class AsteriskWebSocket {
   constructor(config = {}) {
     this.config = {
-      url: config.url || 'ws://192.168.1.2:8088/ws',
+      url: config.url || 'ws://localhost:8088/ws',
       protocols: config.protocols || ['sip'],
       reconnectInterval: config.reconnectInterval || 3000,
       maxReconnectAttempts: config.maxReconnectAttempts || 10,
@@ -272,7 +272,7 @@ export class AsteriskWebSocket {
 
 // Create singleton instance with default configuration
 export const asteriskWebSocket = new AsteriskWebSocket({
-  url: 'ws://192.168.1.2:8088/ws',
+  url: 'ws://localhost:8088/ws',
   protocols: ['sip'],
   reconnectInterval: 3000,
   maxReconnectAttempts: 10,
