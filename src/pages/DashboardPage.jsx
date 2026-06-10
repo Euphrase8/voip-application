@@ -257,6 +257,31 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     }
   }, [user?.extension]);
 
+  // Listen for incoming call accepted from IncomingCallListener
+  useEffect(() => {
+    const handleAccepted = (event) => {
+      const data = event.detail;
+      console.log('[Dashboard] Incoming call accepted via event:', data);
+      if (data.contact) {
+        setActiveCallContact(data.contact);
+      }
+      setCallStatus('Connected');
+      setCurrentPage('calling');
+    };
+
+    const handleRejected = () => {
+      setLocalIncomingCall(null);
+      if (setIncomingCall) setIncomingCall(null);
+    };
+
+    window.addEventListener('incomingCallAccepted', handleAccepted);
+    window.addEventListener('incomingCallRejected', handleRejected);
+    return () => {
+      window.removeEventListener('incomingCallAccepted', handleAccepted);
+      window.removeEventListener('incomingCallRejected', handleRejected);
+    };
+  }, []);
+
   useEffect(() => {
     const fetchUserStatuses = async () => {
       try {

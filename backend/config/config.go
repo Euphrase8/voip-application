@@ -2,9 +2,11 @@ package config
 
 import (
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -210,21 +212,18 @@ func (c *Config) getLocalNetworkIP() string {
 	return ""
 }
 
-// isHostReachable checks if a host:port is reachable
+// isHostReachable checks if a host:port is reachable via TCP
 func (c *Config) isHostReachable(host, port string) bool {
-	// Simple connectivity test with timeout
-	// Note: We'll implement a basic version for now
 	log.Printf("[Config] Checking connectivity to %s:%s", host, port)
 
-	// For now, return true for known good hosts, false for others
-	// In production, you'd implement actual network connectivity testing
-	goodHosts := []string{"asterisk.local", "asterisk", "172.20.10.5", "localhost"}
-	for _, goodHost := range goodHosts {
-		if host == goodHost {
-			return true
-		}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 2*time.Second)
+	if err != nil {
+		log.Printf("[Config] Host %s:%s not reachable: %v", host, port, err)
+		return false
 	}
-	return false
+	conn.Close()
+	log.Printf("[Config] Host %s:%s is reachable", host, port)
+	return true
 }
 
 // GetFrontendConfig returns configuration for frontend consumption

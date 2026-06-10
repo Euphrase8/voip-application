@@ -545,20 +545,29 @@ class WebRTCCallService {
 
     // Handle connection state changes
     this.peerConnection.onconnectionstatechange = () => {
-      console.log('[WebRTCCallService] Connection state:', this.peerConnection.connectionState);
+      const state = this.peerConnection.connectionState;
+      console.log('[WebRTCCallService] Connection state:', state);
 
-      switch (this.peerConnection.connectionState) {
+      switch (state) {
         case 'connected':
           this.connectionEstablished = true;
           this.connected = true;
           this.onCallStatusChange && this.onCallStatusChange('Connected');
           break;
         case 'disconnected':
-        case 'failed':
-        case 'closed':
           this.connectionEstablished = false;
           this.connected = false;
           this.onCallStatusChange && this.onCallStatusChange('Disconnected');
+          break;
+        case 'failed':
+          this.connectionEstablished = false;
+          this.connected = false;
+          this.onCallStatusChange && this.onCallStatusChange('Connection Failed');
+          if (this.currentCall) this.endCall();
+          break;
+        case 'closed':
+          this.connectionEstablished = false;
+          this.connected = false;
           break;
         case 'connecting':
           this.onCallStatusChange && this.onCallStatusChange('Connecting...');
@@ -623,17 +632,6 @@ class WebRTCCallService {
       }
     };
 
-    // Handle connection state changes
-    this.peerConnection.onconnectionstatechange = () => {
-      const state = this.peerConnection.connectionState;
-      console.log('[WebRTCCallService] Connection state:', state);
-      
-      if (state === 'connected') {
-        this.onCallStatusChange && this.onCallStatusChange('Connected');
-      } else if (state === 'failed' || state === 'disconnected') {
-        this.endCall();
-      }
-    };
   }
 
   // Create and send offer
@@ -840,7 +838,7 @@ class WebRTCCallService {
     console.log('[WebRTCCallService] Ending call...');
 
     if (this.currentCall) {
-      // Send WebRTC call ended message
+      // Send single WebRTC call ended message — backend handles cleanup
       this.sendMessage({
         type: 'webrtc_call_ended',
         call_id: this.currentCall.id,
@@ -849,16 +847,7 @@ class WebRTCCallService {
         channel: this.currentCall.id
       });
 
-      // Also send hangup message for backend cleanup
-      this.sendMessage({
-        type: 'hangup',
-        call_id: this.currentCall.id,
-        to: this.currentCall.caller || this.currentCall.target,
-        from: this.extension,
-        channel: this.currentCall.id
-      });
-
-      // Call backend hangup API for proper cleanup
+      // Call backend hangup API for server-side cleanup
       this.callBackendHangup();
     }
 

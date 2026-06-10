@@ -45,6 +45,9 @@ type AMIResponse struct {
 var amiClient *AMIClient
 var amiMutex sync.Mutex
 
+// Track whether AMI has ever connected successfully
+var amiEverConnected bool
+
 // InitAMI initializes the AMI connection with retry logic
 func InitAMI() error {
 	amiMutex.Lock()
@@ -66,6 +69,7 @@ func InitAMI() error {
 	}
 
 	amiClient = client
+	amiEverConnected = true
 	go amiClient.handleEvents()
 	go amiClient.startHealthMonitoring()
 
@@ -78,7 +82,11 @@ func startReconnectionLoop() {
 	for {
 		time.Sleep(10 * time.Second) // Wait 10 seconds between attempts
 
-		if amiClient != nil && amiClient.IsConnected() {
+		amiMutex.Lock()
+		isConnected := amiClient != nil && amiClient.IsConnected()
+		amiMutex.Unlock()
+
+		if isConnected {
 			return // Connection restored, exit loop
 		}
 
@@ -87,6 +95,7 @@ func startReconnectionLoop() {
 			log.Printf("AMI reconnection failed: %v", err)
 		} else {
 			log.Println("AMI reconnection successful")
+			amiEverConnected = true
 			return
 		}
 	}
@@ -108,6 +117,7 @@ func reconnectAMI() error {
 	}
 
 	amiClient = client
+	amiEverConnected = true
 	go amiClient.handleEvents()
 	go amiClient.startHealthMonitoring()
 

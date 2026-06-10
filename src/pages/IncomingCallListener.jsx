@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   FiPhone as Phone,
   FiPhoneOff as PhoneOff,
@@ -20,7 +19,6 @@ const IncomingCallListener = ({ user, onCallAccepted, onCallRejected }) => {
   const [isAnswering, setIsAnswering] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
   const [error, setError] = useState(null);
-  const navigate = useNavigate();
   const ringtoneRef = useRef(null);
   const timeoutRef = useRef(null);
 
@@ -140,23 +138,24 @@ const IncomingCallListener = ({ user, onCallAccepted, onCallRejected }) => {
         }
       }
 
-      // Clear call info and navigate
+      // Dispatch event for DashboardPage to handle
+      window.dispatchEvent(new CustomEvent('incomingCallAccepted', {
+        detail: {
+          contact: { extension: callInfo.caller, name: `Ext ${callInfo.caller}` },
+          callStatus: 'Connected',
+          isOutgoing: false,
+          channel: callInfo.channel,
+          transport: callInfo.transport,
+          isWebRTCCall: isWebRTCCall,
+          callId: callInfo.channel
+        }
+      }));
+
       setCallInfo(null);
 
       if (onCallAccepted) {
         onCallAccepted(callInfo);
       }
-
-      navigate('/calling', {
-          state: {
-            contact: { extension: callInfo.caller, name: `Ext ${callInfo.caller}` },
-            callStatus: 'Connected',
-            isOutgoing: false,
-            channel: callInfo.channel,
-            transport: callInfo.transport,
-            isWebRTCCall: isWebRTCCall
-          },
-        });
 
     } catch (error) {
       console.error('[IncomingCallListener] Failed to answer call:', error);
@@ -204,6 +203,11 @@ const IncomingCallListener = ({ user, onCallAccepted, onCallRejected }) => {
           console.warn('[IncomingCallListener] Comprehensive hangup failed:', hangupError);
         }
       }
+
+      // Notify other components
+      window.dispatchEvent(new CustomEvent('incomingCallRejected', {
+        detail: { channel: callInfo.channel }
+      }));
 
       if (onCallRejected) {
         onCallRejected(callInfo);

@@ -26,3 +26,7 @@ yarn-error.log*
 /backend/voip.db
 /tmp/*.json
 /backend/tmp/
+
+# environment files with secrets
+backend/.env
+.env
