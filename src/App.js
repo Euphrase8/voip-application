@@ -43,8 +43,10 @@ const App = () => {
   ]);
 
   useEffect(() => {
-    // Check if IP configuration is required first
-    if (!ipConfigService.isConfigured()) {
+    const token = localStorage.getItem('token');
+
+    // Check if IP configuration is required first (skip if already authed)
+    if (!ipConfigService.isConfigured() && !token) {
       console.log('[App.js] IP configuration required, redirecting to /ip-config');
       if (window.location.pathname !== '/ip-config') {
         navigate('/ip-config', { replace: true });
@@ -52,7 +54,6 @@ const App = () => {
       return;
     }
 
-    const token = localStorage.getItem('token');
     const extension = localStorage.getItem('extension');
     const storedSipPassword = localStorage.getItem('sipPassword');
     const userRole = localStorage.getItem('userRole') || 'user';

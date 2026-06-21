@@ -1,0 +1,11 @@
+$env:ASTERISK_HOST="172.30.163.165"
+$env:ASTERISK_AMI_PORT="5038"
+$env:ASTERISK_AMI_USERNAME="admin"
+$env:ASTERISK_AMI_SECRET="5011"
+$env:SIP_DOMAIN="172.30.163.165"
+$env:SIP_PORT="8088"
+$env:PUBLIC_HOST="172.30.163.165"
+$env:HOST="0.0.0.0"
+$env:PORT="8080"
+
+& ".\voip-backend.exe"
