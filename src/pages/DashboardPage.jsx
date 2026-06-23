@@ -12,6 +12,7 @@ import {
   FiMessageSquare as Chat,
 } from "react-icons/fi";
 import { Voicemail as VoicemailIcon, Smartphone } from 'lucide-react';
+import toast from "react-hot-toast";
 import HomePage from "./HomePage";
 import SettingsPage from "./SettingsPage";
 import ContactsPage from "./ContactsPage";
@@ -26,6 +27,7 @@ import SoftphoneGuidePage from "./SoftphoneGuidePage";
 import ConferencePage from "./ConferencePage";
 import statusService from "../services/statusService";
 import { getVoicemailUnreadCount } from "../services/voicemail";
+import { getWebSocket } from "../services/websocketservice";
 
 import { call, hangupCall } from "../services/call";
 import webrtcCallService from "../services/webrtcCallService";
@@ -257,6 +259,78 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     }
   }, [user?.extension]);
 
+  // Global WebSocket notification listener
+  useEffect(() => {
+    const socket = getWebSocket();
+    if (!socket) return;
+
+    const handleGlobalMessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        const currentUserId = localStorage.getItem("user_id");
+
+        if (data.type === "chat_message") {
+          const msg = data.data;
+          if (msg && String(msg.sender_id) !== currentUserId && currentPage !== "chat") {
+            toast.custom((t) => (
+              <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-sm w-full bg-white dark:bg-gray-800 shadow-lg rounded-lg pointer-events-auto ring-1 ring-black ring-opacity-5`}>
+                <div className="p-3">
+                  <div className="flex items-start">
+                    <div className="flex-shrink-0 w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs font-medium">
+                      {msg.sender?.username?.charAt(0) || '?'}
+                    </div>
+                    <div className="ml-3 flex-1">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
+                        {msg.sender?.username || "New Message"}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-300 mt-0.5 truncate">
+                        {msg.msg_type === "voice" ? "🎤 Voice message" : msg.content}
+                      </p>
+                    </div>
+                    <button onClick={() => toast.dismiss(t.id)} className="ml-2 text-gray-400 hover:text-gray-600">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ), { duration: 5000 });
+          }
+        } else if (data.type === "voicemail_new") {
+          const vm = data.data;
+          toast.success(`📞 New voicemail from ${vm.caller?.username || vm.caller_number || "Unknown"}`, { duration: 5000 });
+          notificationService.addNotification('info', 'New Voicemail', `Voicemail from ${vm.caller?.username || vm.caller_number || "Unknown"}`);
+        } else if (data.type === "incoming_call" || data.type === "webrtc_call_invitation") {
+          if (data.type === "webrtc_call_invitation") {
+            setLocalIncomingCall({
+              from: data.caller_extension,
+              fromUsername: data.caller_username,
+              caller_username: data.caller_username,
+              channel: data.call_id,
+              priority: "normal",
+              transport: "transport-ws",
+              callId: data.call_id,
+              caller_extension: data.caller_extension
+            });
+          } else {
+            setLocalIncomingCall(data);
+          }
+        } else if (data.type === "user_status_changed") {
+          setContacts(prev => prev.map(c =>
+            c.extension === data.extension
+              ? { ...c, status: data.status, is_online: data.status === "online" }
+              : c
+          ));
+        } else if (data.type === "call_ended" || data.type === "webrtc_call_ended") {
+          setLocalIncomingCall(null);
+          toast("Call ended", { duration: 3000 });
+        }
+      } catch (e) {}
+    };
+
+    socket.addEventListener("message", handleGlobalMessage);
+    return () => socket.removeEventListener("message", handleGlobalMessage);
+  }, [currentPage]);
+
   // Listen for incoming call accepted from IncomingCallListener
   useEffect(() => {
     const handleAccepted = (event) => {
@@ -286,11 +360,11 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     const fetchUserStatuses = async () => {
       try {
         const data = await (await import("../services/users")).getUsers();
-        if (data.length > 0) {
+        if (data.success && data.users.length > 0) {
           setContacts((prev) =>
             prev.map((contact) => ({
               ...contact,
-              status: data.find((u) => u.extension === contact.extension)?.status || contact.status,
+              status: data.users.find((u) => u.extension === contact.extension)?.status || contact.status,
             }))
           );
         }

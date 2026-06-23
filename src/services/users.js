@@ -15,7 +15,7 @@ export const getUsers = async () => {
     });
 
     if (response.data.success && response.data.users) {
-      return response.data.users.map(u => ({
+      const users = response.data.users.map(u => ({
         id: u.id,
         username: u.username,
         extension: u.extension,
@@ -23,16 +23,12 @@ export const getUsers = async () => {
         is_online: u.is_online,
         role: u.role,
       }));
+      return { success: true, users };
     }
-    return [];
+    return { success: false, users: [] };
   } catch (error) {
     console.error('[users.js] Error fetching users:', error);
-    if (error.response) {
-      const { status } = error.response;
-      if (status === 401) throw new Error('Invalid JWT');
-      else if (status === 403) throw new Error('Non-admin user');
-    }
-    throw new Error('Failed to fetch users');
+    return { success: false, users: [], error: error.message };
   }
 };
 

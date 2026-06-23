@@ -67,20 +67,39 @@ func InitiateCall(c *gin.Context) {
 
 	log.Printf("[CALL] Target user found: %s (ext: %s, status: %s)", targetUser.Username, targetUser.Extension, targetUser.Status)
 
-	// Check if target user is online
-	if targetUser.Status != "online" {
-		log.Printf("[CALL] ERROR: Target user %s is not online (status: %s)", targetUser.Username, targetUser.Status)
+	hub := websocket.GetHub()
+	isWSConnected := hub != nil && hub.IsExtensionConnected(req.TargetExtension)
+
+	// Check if target user is online (WebSocket or DB status)
+	if !isWSConnected && targetUser.Status != "online" {
+		log.Printf("[CALL] User %s is offline (DB status: %s, WS: %v)", req.TargetExtension, targetUser.Status, isWSConnected)
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Target extension is not online",
+			"error":   "User is offline",
+			"success": false,
 		})
 		return
+	}
+
+	// Check if target user is busy (has active calls)
+	if isWSConnected {
+		var activeCallCount int64
+		database.GetDB().Model(&models.ActiveCall{}).Where("(caller_id = ? OR callee_id = ?) AND status IN ('ringing', 'connected')", targetUser.ID, targetUser.ID).Count(&activeCallCount)
+		if activeCallCount > 0 {
+			log.Printf("[CALL] User %s is busy (active calls: %d)", req.TargetExtension, activeCallCount)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "User is busy",
+				"success": false,
+			})
+			return
+		}
 	}
 
 	// Check if caller is trying to call themselves
 	if extension == req.TargetExtension {
 		log.Printf("[CALL] ERROR: User %s trying to call themselves", username)
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Cannot call yourself",
+			"error":   "Cannot call yourself",
+			"success": false,
 		})
 		return
 	}
@@ -129,7 +148,6 @@ func InitiateCall(c *gin.Context) {
 	}
 
 	// Notify target user via WebSocket
-	hub := websocket.GetHub()
 	if hub != nil {
 		hub.NotifyIncomingCall(extension, req.TargetExtension, channel)
 	}
@@ -747,13 +765,15 @@ func initiateWebRTCCall(c *gin.Context, userID uint, username, extension string,
 		if err == gorm.ErrRecordNotFound {
 			log.Printf("[WEBRTC] ERROR: Target extension %s not found in database", req.TargetExtension)
 			c.JSON(http.StatusNotFound, gin.H{
-				"error": "Target extension not found",
+				"error":   "Target extension not found",
+				"success": false,
 			})
 			return
 		}
 		log.Printf("[WEBRTC] ERROR: Database error when looking up extension %s: %v", req.TargetExtension, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Database error",
+			"error":   "Database error",
+			"success": false,
 		})
 		return
 	}
@@ -761,20 +781,13 @@ func initiateWebRTCCall(c *gin.Context, userID uint, username, extension string,
 	log.Printf("[WEBRTC] Target user found: %s (ext: %s, status: %s, online: %t)",
 		targetUser.Username, targetUser.Extension, targetUser.Status, targetUser.IsOnline)
 
-	// Check if target user is online (be more lenient for testing)
-	if targetUser.Status != "online" && !targetUser.IsOnline {
-		log.Printf("[WEBRTC] WARNING: Target user %s is not online (status: %s, is_online: %t)",
-			targetUser.Username, targetUser.Status, targetUser.IsOnline)
-		// For testing, allow calls to offline users but warn
-		log.Printf("[WEBRTC] Proceeding with call despite user being offline (for testing)")
-	}
-
 	// Check if target user has active WebSocket connection
 	hub := websocket.GetHub()
 	if hub == nil {
 		log.Printf("[WEBRTC] ERROR: WebSocket hub not available")
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "WebSocket hub not available",
+			"error":   "WebSocket hub not available",
+			"success": false,
 		})
 		return
 	}
@@ -785,10 +798,24 @@ func initiateWebRTCCall(c *gin.Context, userID uint, username, extension string,
 		req.TargetExtension, isConnected, clientCount)
 
 	if !isConnected {
-		log.Printf("[WEBRTC] WARNING: Extension %s is not connected via WebSocket (user status: %s, ws clients: %d)",
-			req.TargetExtension, targetUser.Status, clientCount)
-		// For testing, proceed anyway but log the issue
-		log.Printf("[WEBRTC] Proceeding with call despite no WebSocket connection (for testing)")
+		log.Printf("[WEBRTC] User %s is not connected via WebSocket", req.TargetExtension)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "User is offline",
+			"success": false,
+		})
+		return
+	}
+
+	// Check if target user is busy
+	var activeCallCount int64
+	database.GetDB().Model(&models.ActiveCall{}).Where("(caller_id = ? OR callee_id = ?) AND status IN ('ringing', 'connected')", targetUser.ID, targetUser.ID).Count(&activeCallCount)
+	if activeCallCount > 0 {
+		log.Printf("[WEBRTC] User %s is busy (active calls: %d)", req.TargetExtension, activeCallCount)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "User is busy",
+			"success": false,
+		})
+		return
 	}
 
 	// Generate call ID

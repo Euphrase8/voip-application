@@ -6,15 +6,9 @@ import {
   FiUser as User,
   FiLock as Lock,
   FiMail as Mail,
-  FiPhone as Phone,
   FiUserPlus as UserPlus,
   FiMoon as Moon,
   FiSun as Sun,
-  FiArrowRight as ArrowRight,
-  FiCheckCircle as CheckCircle,
-  FiAlertCircle as AlertCircle,
-  FiArrowLeft as ArrowLeft,
-  FiShield as Shield
 } from 'react-icons/fi';
 import { register } from '../services/register';
 import { useTheme } from '../contexts/ThemeContext';
@@ -24,7 +18,6 @@ import toast from 'react-hot-toast';
 const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
-  const [extension, setExtension] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -46,11 +39,6 @@ const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
       return;
     }
     
-    if (!/^\d{4,6}$/.test(extension)) {
-      toast.error('Extension must be 4-6 digits');
-      return;
-    }
-    
     if (password.length < 6) {
       toast.error('Password must be at least 6 characters long');
       return;
@@ -68,7 +56,7 @@ const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
 
     setLoading(true);
     try {
-      const result = await register(username, email, password, extension);
+      const result = await register(username, email, password);
       if (result.success) {
         toast.success(`Registration successful! Extension: ${result.extension}`);
         setTimeout(() => {
@@ -227,45 +215,11 @@ const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
               </div>
             </motion.div>
 
-            {/* Extension Field */}
-            <motion.div
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.7 }}
-            >
-              <label className={cn(
-                'block text-sm font-medium mb-2',
-                darkMode ? 'text-secondary-300' : 'text-secondary-700'
-              )}>
-                Extension (4-6 digits)
-              </label>
-              <div className="relative">
-                <Phone className={cn(
-                  'absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5',
-                  darkMode ? 'text-secondary-400' : 'text-secondary-500'
-                )} />
-                <input
-                  type="text"
-                  value={extension}
-                  onChange={(e) => setExtension(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  className={cn(
-                    'w-full pl-10 pr-4 py-3 rounded-lg border transition-all duration-200',
-                    'focus:ring-2 focus:ring-primary-500 focus:border-primary-500',
-                    darkMode
-                      ? 'bg-secondary-800 border-secondary-600 text-white placeholder-secondary-400'
-                      : 'bg-white border-secondary-300 text-secondary-900 placeholder-secondary-500'
-                  )}
-                  placeholder="e.g., 1001"
-                  required
-                />
-              </div>
-            </motion.div>
-
             {/* Password Field */}
             <motion.div
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.8 }}
+              transition={{ delay: 0.7 }}
             >
               <label className={cn(
                 'block text-sm font-medium mb-2',
@@ -309,7 +263,7 @@ const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
             <motion.div
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.9 }}
+              transition={{ delay: 0.8 }}
             >
               <label className={cn(
                 'block text-sm font-medium mb-2',
@@ -353,7 +307,7 @@ const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 1.0 }}
+              transition={{ delay: 0.9 }}
               className="flex items-start space-x-3"
             >
               <input
@@ -382,7 +336,7 @@ const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
             <motion.button
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 1.1 }}
+              transition={{ delay: 1.0 }}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               type="submit"
@@ -413,7 +367,7 @@ const RegisterPage = ({ onRegister, onSwitchToLogin }) => {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ delay: 1.2 }}
+            transition={{ delay: 1.1 }}
             className="mt-6 text-center"
           >
             <p className={cn(

@@ -561,7 +561,7 @@ func CreateUser(c *gin.Context) {
 		Username  string `json:"username" binding:"required,min=3,max=50"`
 		Email     string `json:"email" binding:"required,email"`
 		Password  string `json:"password" binding:"required,min=6"`
-		Extension string `json:"extension" binding:"required,min=4,max=6"`
+		Extension string `json:"extension"`
 		Role      string `json:"role"`
 	}
 
@@ -572,7 +572,6 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
-	// Validate role
 	if req.Role == "" {
 		req.Role = "user"
 	}
@@ -583,55 +582,47 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
-	// Check if username already exists
 	var existingUser models.User
 	if err := database.GetDB().Where("username = ?", req.Username).First(&existingUser).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": "Username already exists",
-		})
+		c.JSON(http.StatusConflict, gin.H{"error": "Username already exists"})
 		return
 	}
 
-	// Check if email already exists
 	if err := database.GetDB().Where("email = ?", req.Email).First(&existingUser).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": "Email already exists",
-		})
+		c.JSON(http.StatusConflict, gin.H{"error": "Email already exists"})
 		return
 	}
 
-	// Check if extension already exists
-	if err := database.GetDB().Where("extension = ?", req.Extension).First(&existingUser).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": "Extension already exists",
-		})
-		return
+	extension := req.Extension
+	if extension == "" {
+		extension = generateExtension()
+	} else {
+		var count int64
+		database.GetDB().Model(&models.User{}).Where("extension = ?", extension).Count(&count)
+		if count > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "Extension already exists"})
+			return
+		}
 	}
 
-	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to hash password",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
 		return
 	}
 
-	// Create new user
 	user := models.User{
 		Username:  req.Username,
 		Email:     req.Email,
 		Password:  string(hashedPassword),
-		Extension: req.Extension,
+		Extension: extension,
 		Status:    "offline",
 		Role:      req.Role,
 		IsOnline:  false,
 	}
 
 	if err := database.GetDB().Create(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to create user",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
 

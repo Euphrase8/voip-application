@@ -162,6 +162,7 @@ func main() {
 
 	// Public routes (no authentication required)
 	public := r.Group("/api")
+	public.Use(middleware.AuthRateLimitMiddleware())
 	{
 		public.POST("/login", handlers.Login)
 		public.POST("/register", handlers.Register)
@@ -171,6 +172,7 @@ func main() {
 
 	// Protected routes (authentication required)
 	protected := r.Group("/protected")
+	protected.Use(middleware.RateLimitMiddleware())
 	protected.Use(middleware.AuthMiddleware())
 	{
 		// User routes
@@ -198,10 +200,12 @@ func main() {
 		chatRoutes := protected.Group("/messages")
 		{
 			chatRoutes.POST("/send", handlers.SendMessage)
+			chatRoutes.POST("/send-voice", handlers.SendVoiceMessage)
 			chatRoutes.GET("/conversations", handlers.GetConversations)
 			chatRoutes.GET("/unread-count", handlers.GetUnreadCount)
 			chatRoutes.GET("/:userId", handlers.GetMessages)
 			chatRoutes.PUT("/read/:senderId", handlers.MarkAsRead)
+			chatRoutes.GET("/voice/:id/audio", handlers.GetVoiceMessageAudio)
 
 			// Group chat
 			chatRoutes.POST("/group/create", handlers.CreateGroup)

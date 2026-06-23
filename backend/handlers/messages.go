@@ -1,15 +1,26 @@
 package handlers
 
 import (
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 	"voip-backend/database"
 	"voip-backend/models"
+	"voip-backend/security"
 	"voip-backend/websocket"
 
 	"github.com/gin-gonic/gin"
 )
+
+const messageVoiceDir = "./message_voice"
+
+func ensureMessageVoiceDir() {
+	os.MkdirAll(messageVoiceDir, 0755)
+}
 
 func SendMessage(c *gin.Context) {
 	userID, _ := c.Get("user_id")
@@ -19,6 +30,8 @@ func SendMessage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
+
+	req.Content = security.SanitizeMessage(req.Content)
 
 	msg := models.Message{
 		SenderID:   userID.(uint),
@@ -78,19 +91,43 @@ func GetMessages(c *gin.Context) {
 		return
 	}
 
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
+
 	db := database.GetDB()
 	var messages []models.Message
+	var totalCount int64
+
+	db.Model(&models.Message{}).Where(
+		"(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)",
+		userID, otherID, otherID, userID,
+	).Count(&totalCount)
+
 	db.Where(
 		"(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)",
 		userID, otherID, otherID, userID,
-	).Order("created_at asc").Preload("Sender").Find(&messages)
+	).Order("created_at asc").Limit(limit).Offset(offset).Preload("Sender").Find(&messages)
 
 	db.Model(&models.Message{}).Where(
 		"sender_id = ? AND receiver_id = ? AND is_read = ?",
 		otherID, userID, false,
 	).Update("is_read", true).Update("read_at", time.Now())
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "messages": messages})
+	c.JSON(http.StatusOK, gin.H{
+		"success":     true,
+		"messages":    messages,
+		"total":       totalCount,
+		"page":        page,
+		"limit":       limit,
+		"total_pages": (int(totalCount) + limit - 1) / limit,
+	})
 }
 
 func GetConversations(c *gin.Context) {
@@ -272,6 +309,120 @@ func GetUserGroups(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "groups": groups})
+}
+
+func SendVoiceMessage(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	ensureMessageVoiceDir()
+
+	receiverID, err := strconv.ParseUint(c.PostForm("receiver_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid receiver ID"})
+		return
+	}
+
+	durationStr := c.PostForm("duration")
+	duration := 0
+	if durationStr != "" {
+		duration, _ = strconv.Atoi(durationStr)
+	}
+
+	file, err := c.FormFile("audio")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Audio file required"})
+		return
+	}
+
+	filename := fmt.Sprintf("voice_%d_%d_%d.webm", userID.(uint), receiverID, time.Now().Unix())
+	filePath := filepath.Join(messageVoiceDir, filename)
+
+	src, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to open file"})
+		return
+	}
+	defer src.Close()
+
+	dst, err := os.Create(filePath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to save file"})
+		return
+	}
+	defer dst.Close()
+
+	written, _ := io.Copy(dst, src)
+
+	msg := models.Message{
+		SenderID:   userID.(uint),
+		ReceiverID: uint(receiverID),
+		Content:    "[Voice Message]",
+		MsgType:    "voice",
+		FilePath:   filePath,
+		FileName:   filename,
+		FileSize:   written,
+		Duration:   duration,
+	}
+
+	db := database.GetDB()
+	if err := db.Create(&msg).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to save voice message"})
+		return
+	}
+
+	db.Preload("Sender").First(&msg, msg.ID)
+
+	hub := websocket.GetHub()
+	if hub != nil {
+		var receiver models.User
+		if err := db.First(&receiver, receiverID).Error; err == nil {
+			wsMsg := websocket.Message{
+				Type:      "chat_message",
+				From:      strconv.FormatUint(uint64(msg.SenderID), 10),
+				To:        strconv.FormatUint(uint64(receiverID), 10),
+				Data:      msg,
+				Timestamp: msg.CreatedAt.Unix(),
+			}
+			hub.SendToExtension(receiver.Extension, wsMsg)
+		}
+
+		var sender models.User
+		if err := db.First(&sender, userID).Error; err == nil {
+			confirmation := websocket.Message{
+				Type:      "chat_message_sent",
+				From:      sender.Extension,
+				Data:      msg,
+				Timestamp: msg.CreatedAt.Unix(),
+			}
+			hub.SendToExtension(sender.Extension, confirmation)
+		}
+	}
+
+	updateConversation(userID.(uint), uint(receiverID), msg.Content, msg.CreatedAt)
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": msg})
+}
+
+func GetVoiceMessageAudio(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid message ID"})
+		return
+	}
+
+	db := database.GetDB()
+	var msg models.Message
+	if err := db.Where("id = ? AND (sender_id = ? OR receiver_id = ?)", id, userID, userID).First(&msg).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Message not found"})
+		return
+	}
+
+	if msg.MsgType != "voice" || msg.FilePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Not a voice message"})
+		return
+	}
+
+	c.File(msg.FilePath)
 }
 
 func updateConversation(user1ID, user2ID uint, lastMessage string, lastMsgAt time.Time) {

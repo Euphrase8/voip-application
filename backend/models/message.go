@@ -5,19 +5,20 @@ import (
 )
 
 type Message struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	SenderID   uint      `json:"sender_id" gorm:"index;not null"`
-	ReceiverID uint      `json:"receiver_id" gorm:"index;not null"`
-	Content    string    `json:"content" gorm:"type:text;not null"`
-	MsgType    string    `json:"msg_type" gorm:"default:text"` // text, image, file
-	FilePath   string    `json:"file_path,omitempty"`
-	FileName   string    `json:"file_name,omitempty"`
-	FileSize   int64     `json:"file_size,omitempty"`
-	IsRead     bool      `json:"is_read" gorm:"default:false"`
+	ID         uint       `json:"id" gorm:"primaryKey"`
+	SenderID   uint       `json:"sender_id" gorm:"index;not null"`
+	ReceiverID uint       `json:"receiver_id" gorm:"index;not null"`
+	Content    string     `json:"content" gorm:"type:text;not null"`
+	MsgType    string     `json:"msg_type" gorm:"default:text"` // text, image, file, voice
+	FilePath   string     `json:"file_path,omitempty"`
+	FileName   string     `json:"file_name,omitempty"`
+	FileSize   int64      `json:"file_size,omitempty"`
+	Duration   int        `json:"duration,omitempty"`             // seconds (for voice messages)
+	IsRead     bool       `json:"is_read" gorm:"default:false"`
 	ReadAt     *time.Time `json:"read_at,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	Sender     User      `json:"sender" gorm:"foreignKey:SenderID"`
-	Receiver   User      `json:"receiver" gorm:"foreignKey:ReceiverID"`
+	CreatedAt  time.Time  `json:"created_at"`
+	Sender     User       `json:"sender" gorm:"foreignKey:SenderID"`
+	Receiver   User       `json:"receiver" gorm:"foreignKey:ReceiverID"`
 }
 
 type ChatConversation struct {
@@ -55,6 +56,11 @@ type ChatGroupMessage struct {
 	Content   string    `json:"content" gorm:"type:text;not null"`
 	CreatedAt time.Time `json:"created_at"`
 	Sender    User      `json:"sender" gorm:"foreignKey:SenderID"`
+}
+
+type SendVoiceMessageRequest struct {
+	ReceiverID uint   `json:"receiver_id" binding:"required"`
+	Duration   int    `json:"duration"`
 }
 
 type TypingIndicator struct {

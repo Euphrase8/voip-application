@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"fmt"
+	"math/rand"
 	"net/http"
 	"time"
 	"voip-backend/auth"
 	"voip-backend/database"
 	"voip-backend/models"
+	"voip-backend/security"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -22,7 +25,6 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Find user by username
 	var user models.User
 	if err := database.GetDB().Where("username = ?", req.Username).First(&user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -37,7 +39,6 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Check password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid credentials",
@@ -45,7 +46,6 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Update user status to online and set login time
 	now := time.Now()
 	database.GetDB().Model(&user).Updates(map[string]interface{}{
 		"status":     "online",
@@ -54,7 +54,6 @@ func Login(c *gin.Context) {
 		"last_seen":  now,
 	})
 
-	// Generate JWT token
 	token, err := auth.GenerateToken(user.ID, user.Username, user.Extension, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -71,7 +70,20 @@ func Login(c *gin.Context) {
 	})
 }
 
-// Register handles user registration
+// generateExtension creates a unique 4-digit extension number
+func generateExtension() string {
+	db := database.GetDB()
+	for {
+		ext := fmt.Sprintf("%04d", rand.Intn(9000)+1000)
+		var count int64
+		db.Model(&models.User{}).Where("extension = ?", ext).Count(&count)
+		if count == 0 {
+			return ext
+		}
+	}
+}
+
+// Register handles user registration with auto-generated extension
 func Register(c *gin.Context) {
 	var req models.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -81,7 +93,6 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// Check if username already exists
 	var existingUser models.User
 	if err := database.GetDB().Where("username = ?", req.Username).First(&existingUser).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{
@@ -90,7 +101,6 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// Check if email already exists
 	if err := database.GetDB().Where("email = ?", req.Email).First(&existingUser).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{
 			"error": "Email already exists",
@@ -98,15 +108,26 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// Check if extension already exists
-	if err := database.GetDB().Where("extension = ?", req.Extension).First(&existingUser).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": "Extension already exists",
-		})
-		return
+	extension := req.Extension
+	if extension == "" {
+		extension = generateExtension()
+	} else {
+		if !security.IsValidExtension(extension) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Invalid extension format. Must be 4-6 digits.",
+			})
+			return
+		}
+		var count int64
+		database.GetDB().Model(&models.User{}).Where("extension = ?", extension).Count(&count)
+		if count > 0 {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "Extension already exists",
+			})
+			return
+		}
 	}
 
-	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -115,12 +136,11 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// Create new user
 	user := models.User{
 		Username:  req.Username,
 		Email:     req.Email,
 		Password:  string(hashedPassword),
-		Extension: req.Extension,
+		Extension: extension,
 		Status:    "offline",
 		Role:      "user",
 	}

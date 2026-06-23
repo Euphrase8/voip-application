@@ -5,30 +5,21 @@ const API_URL = CONFIG.API_URL;
 
 export const register = async (username, email, password, extension) => {
   try {
-    // Validate inputs
-    if (!username || !email || !password || !extension) {
+    if (!username || !email || !password) {
       return {
         success: false,
-        message: "All fields (username, email, password, extension) are required",
+        message: "Username, email, and password are required",
       };
     }
 
-    if (!/^\d{4,6}$/.test(extension)) {
-      return {
-        success: false,
-        message: "Extension must be a 4-6 digit number",
-      };
+    console.log('[register.js] Attempting registration for:', { username, email });
+
+    const payload = { username, email, password };
+    if (extension) {
+      payload.extension = extension;
     }
 
-    console.log('[register.js] Attempting registration for:', { username, email, extension });
-
-    // Register user
-    const response = await axios.post(`${API_URL}/api/register`, {
-      username,
-      email,
-      password,
-      extension,
-    });
+    const response = await axios.post(`${API_URL}/api/register`, payload);
 
     const { message, user } = response.data;
 

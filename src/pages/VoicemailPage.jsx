@@ -1,9 +1,14 @@
 import { useState, useEffect, useRef } from "react";
-import { FiPlay, FiTrash2, FiCheck, FiBell, FiChevronDown } from "react-icons/fi";
+import { FiPlay, FiPause, FiTrash2, FiCheck, FiBell, FiMic, FiSquare, FiSend, FiUser, FiSearch } from "react-icons/fi";
 import { Voicemail as FiVoicemail } from 'lucide-react';
 import { motion } from "framer-motion";
 import { getVoicemails, markVoicemailRead, deleteVoicemail, getVoicemailAudioUrl, getVoicemailUnreadCount, getMissedCalls } from "../services/voicemail";
+import { getUsers } from "../services/users";
+import { getToken } from "../services/login";
+import { CONFIG } from "../services/config";
+import axios from "axios";
 import { cn } from "../utils/ui";
+import toast from "react-hot-toast";
 
 const VoicemailPage = ({ darkMode }) => {
   const [voicemails, setVoicemails] = useState([]);
@@ -11,12 +16,24 @@ const VoicemailPage = ({ darkMode }) => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [playing, setPlaying] = useState(null);
   const [activeTab, setActiveTab] = useState("voicemail");
+  const [showSend, setShowSend] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [users, setUsers] = useState([]);
+  const [selectedRecipient, setSelectedRecipient] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isPaused, setIsPaused] = useState(false);
   const audioRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordingTimerRef = useRef(null);
+  const currentUserId = localStorage.getItem("user_id");
 
   useEffect(() => {
     loadVoicemails();
     loadMissedCalls();
     loadUnreadCount();
+    loadUsers();
   }, []);
 
   const loadVoicemails = async () => {
@@ -40,14 +57,27 @@ const VoicemailPage = ({ darkMode }) => {
     } catch (e) {}
   };
 
+  const loadUsers = async () => {
+    try {
+      const data = await getUsers();
+      if (data.success) setUsers(data.users.filter(u => String(u.id) !== currentUserId));
+    } catch (e) {}
+  };
+
   const handlePlay = async (vm) => {
     if (playing === vm.id) {
-      audioRef.current?.pause();
-      setPlaying(null);
+      if (audioRef.current && !audioRef.current.paused) {
+        audioRef.current.pause();
+        setIsPaused(true);
+      } else if (audioRef.current && isPaused) {
+        audioRef.current.play();
+        setIsPaused(false);
+      }
       return;
     }
 
     setPlaying(vm.id);
+    setIsPaused(false);
 
     if (!vm.is_read) {
       await markVoicemailRead(vm.id);
@@ -56,10 +86,16 @@ const VoicemailPage = ({ darkMode }) => {
     }
 
     setTimeout(() => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
       const audio = new Audio(getVoicemailAudioUrl(vm.id));
       audioRef.current = audio;
-      audio.play().catch(() => setPlaying(null));
-      audio.onended = () => setPlaying(null);
+      audio.play().catch(() => { setPlaying(null); setIsPaused(false); });
+      audio.onended = () => { setPlaying(null); setIsPaused(false); };
+      audio.onpause = () => setIsPaused(true);
+      audio.onplay = () => setIsPaused(false);
     }, 100);
   };
 
@@ -67,7 +103,83 @@ const VoicemailPage = ({ darkMode }) => {
     try {
       await deleteVoicemail(id);
       loadVoicemails();
+      toast.success("Voicemail deleted");
     } catch (e) { console.error("Failed to delete voicemail", e); }
+  };
+
+  const startRecording = async () => {
+    if (!selectedRecipient) {
+      toast.error("Please select a recipient first");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+      });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(audioChunksRef.current, {
+          type: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+        });
+        if (recordingDuration >= 1) {
+          await sendVoiceMail(blob);
+        }
+        setRecordingDuration(0);
+        setIsRecording(false);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingDuration(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+    } catch (e) {
+      toast.error("Microphone access denied. Please allow microphone permissions.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    clearInterval(recordingTimerRef.current);
+  };
+
+  const sendVoiceMail = async (blob) => {
+    const formData = new FormData();
+    formData.append('audio', blob, `voicemail_${Date.now()}.webm`);
+    formData.append('callee_id', selectedRecipient.id);
+    formData.append('caller_number', localStorage.getItem('extension') || '');
+    formData.append('duration', String(recordingDuration));
+
+    try {
+      const res = await axios.post(`${CONFIG.API_URL}/protected/voicemail/create`, formData, {
+        headers: {
+          Authorization: `Bearer ${getToken()}`,
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      if (res.data.success) {
+        toast.success(`Voice mail sent to ${selectedRecipient.username}`);
+        setShowSend(false);
+        setSelectedRecipient(null);
+        loadVoicemails();
+      } else {
+        toast.error("Failed to send voice mail");
+      }
+    } catch (e) {
+      toast.error("Failed to send voice mail");
+    }
   };
 
   const formatDate = (dateStr) => {
@@ -81,11 +193,16 @@ const VoicemailPage = ({ darkMode }) => {
   };
 
   const formatDuration = (seconds) => {
-    if (!seconds) return "0:00";
+    if (!seconds && seconds !== 0) return "0:00";
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
   };
+
+  const filteredUsers = users.filter(u =>
+    u.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    u.extension?.includes(searchTerm)
+  );
 
   return (
     <div className={cn("h-full flex flex-col", darkMode ? "text-white" : "text-gray-900")}>
@@ -105,9 +222,22 @@ const VoicemailPage = ({ darkMode }) => {
                 </span>
               )}
             </div>
+            <button
+              onClick={() => setShowSend(!showSend)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors",
+                showSend
+                  ? "bg-blue-500 text-white"
+                  : darkMode
+                    ? "hover:bg-gray-700 text-gray-300"
+                    : "hover:bg-gray-100 text-gray-600"
+              )}
+            >
+              <FiSend className="w-3.5 h-3.5" />
+              Send
+            </button>
           </div>
 
-          {/* Tabs */}
           <div className="flex gap-1">
             <button
               onClick={() => setActiveTab("voicemail")}
@@ -135,6 +265,98 @@ const VoicemailPage = ({ darkMode }) => {
           </div>
         </div>
       </div>
+
+      {/* Send Voicemail Panel */}
+      {showSend && (
+        <div className={cn(
+          "flex-shrink-0 border-b p-4",
+          darkMode ? "border-gray-700 bg-gray-800" : "border-gray-200 bg-gray-50"
+        )}>
+          <h3 className="text-sm font-semibold mb-3">Send Voice Message</h3>
+          {!selectedRecipient ? (
+            <>
+              <div className="relative mb-3">
+                <FiSearch className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search user by name or extension..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className={cn(
+                    "w-full pl-9 pr-3 py-2 rounded-lg text-sm border",
+                    darkMode
+                      ? "bg-gray-700 border-gray-600 text-white"
+                      : "bg-white border-gray-200 text-gray-900"
+                  )}
+                />
+              </div>
+              <div className="max-h-32 overflow-y-auto space-y-1">
+                {filteredUsers.map((u) => (
+                  <button
+                    key={u.id}
+                    onClick={() => { setSelectedRecipient(u); setSearchTerm(""); }}
+                    className={cn(
+                      "w-full flex items-center gap-2 p-2 rounded-lg text-left text-sm transition-colors",
+                      darkMode ? "hover:bg-gray-700" : "hover:bg-gray-200"
+                    )}
+                  >
+                    <FiUser className="w-4 h-4 text-gray-400" />
+                    <span className="font-medium">{u.username}</span>
+                    <span className="text-xs text-gray-400">{u.extension}</span>
+                  </button>
+                ))}
+                {filteredUsers.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-2">No users found</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={cn(
+                  "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium",
+                  darkMode ? "bg-gray-600" : "bg-blue-100 text-blue-600"
+                )}>
+                  {selectedRecipient.username?.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-sm font-medium">{selectedRecipient.username}</p>
+                  <p className="text-xs text-gray-400">{selectedRecipient.extension}</p>
+                </div>
+              </div>
+              {isRecording ? (
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
+                    <span className="text-sm text-red-500">{formatDuration(recordingDuration)}</span>
+                  </div>
+                  <button
+                    onClick={stopRecording}
+                    className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                    title="Stop recording"
+                  >
+                    <FiSquare className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={startRecording}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                >
+                  <FiMic className="w-4 h-4" />
+                  Record
+                </button>
+              )}
+              <button
+                onClick={() => { setSelectedRecipient(null); setIsRecording(false); clearInterval(recordingTimerRef.current); }}
+                className="text-xs text-gray-400 hover:text-gray-600"
+              >
+                Change
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
@@ -196,15 +418,20 @@ const VoicemailPage = ({ darkMode }) => {
                               ? "hover:bg-gray-600 text-gray-300"
                               : "hover:bg-gray-100 text-gray-600"
                         )}
-                        title={playing === vm.id ? "Stop" : "Play"}
+                        title={playing === vm.id ? (isPaused ? "Resume" : "Pause") : "Play"}
                       >
-                        <FiPlay className={cn("w-4 h-4", playing === vm.id && "animate-pulse")} />
+                        {playing === vm.id && !isPaused ? (
+                          <FiPause className="w-4 h-4" />
+                        ) : (
+                          <FiPlay className={cn("w-4 h-4", playing === vm.id && "animate-pulse")} />
+                        )}
                       </button>
                       {!vm.is_read && (
                         <button
                           onClick={async () => {
                             await markVoicemailRead(vm.id);
                             loadVoicemails();
+                            loadUnreadCount();
                           }}
                           className={cn(
                             "p-2 rounded-lg transition-colors",

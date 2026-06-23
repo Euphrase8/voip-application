@@ -58,6 +58,12 @@ func InitDatabase() {
 
 	log.Println("Database migration completed")
 
+	// Create composite indexes for performance
+	DB.Exec("CREATE INDEX IF NOT EXISTS idx_messages_sender_receiver ON messages(sender_id, receiver_id)")
+	DB.Exec("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)")
+	DB.Exec("CREATE INDEX IF NOT EXISTS idx_voicemails_callee ON voicemails(callee_id, created_at)")
+	DB.Exec("CREATE INDEX IF NOT EXISTS idx_conversations_users ON chat_conversations(user1_id, user2_id)")
+
 	// Create default admin user if not exists
 	createDefaultUsers()
 }

@@ -8,9 +8,29 @@ const authHeaders = () => ({
   headers: { Authorization: `Bearer ${getToken()}` },
 });
 
+const uploadHeaders = () => ({
+  headers: {
+    Authorization: `Bearer ${getToken()}`,
+    'Content-Type': 'multipart/form-data',
+  },
+});
+
 export const sendMessage = async (receiverId, content, msgType = 'text') => {
   const res = await axios.post(`${API_URL}/protected/messages/send`, { receiver_id: receiverId, content, msg_type: msgType }, authHeaders());
   return res.data;
+};
+
+export const sendVoiceMessage = async (receiverId, blob, duration) => {
+  const formData = new FormData();
+  formData.append('audio', blob, `voice_${Date.now()}.webm`);
+  formData.append('receiver_id', receiverId);
+  formData.append('duration', String(duration));
+  const res = await axios.post(`${API_URL}/protected/messages/send-voice`, formData, uploadHeaders());
+  return res.data;
+};
+
+export const getVoiceMessageAudioUrl = (messageId) => {
+  return `${API_URL}/protected/messages/voice/${messageId}/audio?token=${getToken()}`;
 };
 
 export const getMessages = async (userId) => {

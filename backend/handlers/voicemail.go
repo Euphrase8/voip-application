@@ -174,6 +174,7 @@ func DeleteVoicemail(c *gin.Context) {
 }
 
 func GetVoicemailAudio(c *gin.Context) {
+	userID, _ := c.Get("user_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid voicemail ID"})
@@ -182,7 +183,7 @@ func GetVoicemailAudio(c *gin.Context) {
 
 	db := database.GetDB()
 	var vm models.Voicemail
-	if err := db.First(&vm, id).Error; err != nil {
+	if err := db.Where("id = ? AND (callee_id = ? OR caller_id = ?)", id, userID, userID).First(&vm).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Voicemail not found"})
 		return
 	}
