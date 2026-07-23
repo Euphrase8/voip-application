@@ -102,7 +102,6 @@ class StatusService {
 
       console.log(`[StatusService] Updating status to: ${status} for user: ${user} (${extension})`);
       console.log(`[StatusService] Using API URL: ${CONFIG.API_URL}`);
-      console.log(`[StatusService] Token length: ${token.length}`);
 
       const requestBody = { status };
       console.log(`[StatusService] Request body:`, requestBody);
@@ -288,12 +287,6 @@ class StatusService {
       const extension = localStorage.getItem('extension');
 
       console.log('[StatusService] Testing status endpoint...');
-      console.log('[StatusService] Auth data:', {
-        hasToken: !!token,
-        tokenLength: token?.length,
-        user,
-        extension
-      });
 
       if (!token) {
         throw new Error('No token available');

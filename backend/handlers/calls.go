@@ -641,7 +641,7 @@ func testWebSocketConnection() map[string]interface{} {
 func testAMIConnectionWithConfig(asteriskHost, amiPort string) map[string]interface{} {
 	// For public endpoint, we can't test actual AMI connection without credentials
 	// Instead, test if the AMI port is reachable
-	address := fmt.Sprintf("%s:%s", asteriskHost, amiPort)
+	address := net.JoinHostPort(asteriskHost, amiPort)
 
 	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
 	if err != nil {
@@ -1206,6 +1206,91 @@ func calculateCallStatistics() CallStatistics {
 	return stats
 }
 
+// AdminGetActiveCalls returns all active calls in the system (admin only)
+func AdminGetActiveCalls(c *gin.Context) {
+	var activeCalls []models.ActiveCall
+	if err := database.GetDB().Preload("Caller").Preload("Callee").Find(&activeCalls).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to fetch active calls",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"active_calls": activeCalls,
+		"count":        len(activeCalls),
+	})
+}
+
+// AdminTerminateCall terminates any call by channel (admin only)
+func AdminTerminateCall(c *gin.Context) {
+	var req struct {
+		CallID  string `json:"call_id"`
+		Channel string `json:"channel"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request format",
+		})
+		return
+	}
+
+	if req.Channel == "" && req.CallID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Either call_id or channel is required",
+		})
+		return
+	}
+
+	channel := req.Channel
+	if channel == "" && req.CallID != "" {
+		channel = req.CallID
+	}
+
+	if err := asterisk.HangupCall(channel); err != nil {
+		log.Printf("[ADMIN] Failed to terminate call on channel %s: %v", channel, err)
+		// Remove from DB even if Asterisk hangup fails
+	}
+
+	database.GetDB().Where("channel = ? OR id = ?", channel, req.CallID).Delete(&models.ActiveCall{})
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Call terminated successfully",
+	})
+}
+
+// AdminInitiateCall initiates a call from the admin panel (admin only)
+func AdminInitiateCall(c *gin.Context) {
+	var req struct {
+		TargetExtension string `json:"target_extension" binding:"required"`
+		CallerExtension string `json:"caller_extension" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request format",
+		})
+		return
+	}
+
+	channel, err := asterisk.InitiateCall(req.CallerExtension, req.TargetExtension)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to initiate call: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Call initiated successfully",
+		"channel": channel,
+	})
+}
+
 // GetRealTimeMetrics returns real-time system metrics (admin only)
 func GetRealTimeMetrics(c *gin.Context) {
 	// Get current statistics
@@ -1216,7 +1301,7 @@ func GetRealTimeMetrics(c *gin.Context) {
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 	database.GetDB().Model(&models.User{}).Where("status = ? AND is_online = ? AND last_seen > ?", "online", true, fiveMinutesAgo).Count(&onlineUsers)
 	database.GetDB().Model(&models.ActiveCall{}).Count(&activeCalls)
-	database.GetDB().Model(&models.CallLog{}).Where("DATE(created_at) = DATE(NOW())").Count(&callsToday)
+	database.GetDB().Model(&models.CallLog{}).Where("DATE(created_at) = DATE('now')").Count(&callsToday)
 
 	// Calculate call statistics
 	callStats := calculateCallStatistics()
@@ -1251,5 +1336,248 @@ func GetRealTimeMetrics(c *gin.Context) {
 		},
 		"recent_calls": recentCalls,
 		"call_stats":   callStats,
+	})
+}
+
+// TransferCall handles call transfer (blind or attended)
+func TransferCall(c *gin.Context) {
+	_, _, extension, _, ok := middleware.GetUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	var req struct {
+		Channel    string `json:"channel" binding:"required"`
+		Target     string `json:"target" binding:"required"`
+		TransferType string `json:"transfer_type"` // "blind" or "attended"
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	transferType := req.TransferType
+	if transferType == "" {
+		transferType = "blind"
+	}
+
+	amiClient := asterisk.GetAMIClient()
+	if amiClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "AMI not available"})
+		return
+	}
+
+	fields := map[string]string{
+		"Channel": req.Channel,
+		"Context": "internal",
+		"Exten":   req.Target,
+		"Priority": "1",
+	}
+
+	var action string
+	if transferType == "attended" {
+		action = "Atxfer"
+	} else {
+		action = "BlindTransfer"
+	}
+
+	resp, err := amiClient.SendCommand(action, fields)
+	if err != nil {
+		log.Printf("[Calls] Transfer failed for channel %s to %s: %v", req.Channel, req.Target, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	log.Printf("[Calls] Call transfer initiated: channel=%s, target=%s, type=%s, by=%s", req.Channel, req.Target, transferType, extension)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Call transfer initiated",
+		"response": resp,
+	})
+}
+
+// HoldCall puts a call on hold
+func HoldCall(c *gin.Context) {
+	_, _, extension, _, ok := middleware.GetUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	var req struct {
+		Channel string `json:"channel" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	amiClient := asterisk.GetAMIClient()
+	if amiClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "AMI not available"})
+		return
+	}
+
+	resp, err := amiClient.SendCommand("SetVar", map[string]string{
+		"Channel": req.Channel,
+		"Variable": "MOH_CLASS",
+		"Value":   "default",
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// Put the channel on hold using mute/unmute with music
+	resp2, err := amiClient.SendCommand("Command", map[string]string{
+		"Command": fmt.Sprintf("channel originate %s application MusicOnHold", req.Channel),
+	})
+	_ = resp2
+
+	log.Printf("[Calls] Call put on hold: channel=%s, by=%s", req.Channel, extension)
+	c.JSON(http.StatusOK, gin.H{
+		"success":  true,
+		"message":  "Call put on hold",
+		"response": resp,
+	})
+}
+
+// UnholdCall removes a call from hold
+func UnholdCall(c *gin.Context) {
+	_, _, extension, _, ok := middleware.GetUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	var req struct {
+		Channel string `json:"channel" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	amiClient := asterisk.GetAMIClient()
+	if amiClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "AMI not available"})
+		return
+	}
+
+	resp, err := amiClient.SendCommand("Unhold", map[string]string{
+		"Channel": req.Channel,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	log.Printf("[Calls] Call taken off hold: channel=%s, by=%s", req.Channel, extension)
+	c.JSON(http.StatusOK, gin.H{
+		"success":  true,
+		"message":  "Call taken off hold",
+		"response": resp,
+	})
+}
+
+// StartCallRecording starts recording a call
+func StartCallRecording(c *gin.Context) {
+	_, _, extension, _, ok := middleware.GetUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	var req struct {
+		Channel string `json:"channel" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	amiClient := asterisk.GetAMIClient()
+	if amiClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "AMI not available"})
+		return
+	}
+
+	recordFile := fmt.Sprintf("/var/spool/asterisk/monitor/%s-%s.wav", req.Channel, time.Now().Format("20060102-150405"))
+	resp, err := amiClient.SendCommand("Monitor", map[string]string{
+		"Channel": req.Channel,
+		"File":    recordFile,
+		"Format":  "wav",
+		"Mix":     "1",
+	})
+	if err != nil {
+		log.Printf("[Calls] Failed to start recording for channel %s: %v", req.Channel, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// Store recording metadata
+	db := database.GetDB()
+	db.Create(&models.CallRecording{
+		Channel:    req.Channel,
+		FilePath:   recordFile,
+		StartedBy:  extension,
+		StartedAt:  time.Now(),
+		IsActive:   true,
+	})
+
+	log.Printf("[Calls] Recording started: channel=%s, file=%s, by=%s", req.Channel, recordFile, extension)
+	c.JSON(http.StatusOK, gin.H{
+		"success":     true,
+		"message":     "Call recording started",
+		"file":        recordFile,
+		"ami_response": resp,
+	})
+}
+
+// StopCallRecording stops recording a call
+func StopCallRecording(c *gin.Context) {
+	_, _, extension, _, ok := middleware.GetUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	var req struct {
+		Channel string `json:"channel" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	amiClient := asterisk.GetAMIClient()
+	if amiClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "AMI not available"})
+		return
+	}
+
+	resp, err := amiClient.SendCommand("StopMonitor", map[string]string{
+		"Channel": req.Channel,
+	})
+	if err != nil {
+		log.Printf("[Calls] Failed to stop recording for channel %s: %v", req.Channel, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// Update recording metadata
+	db := database.GetDB()
+	db.Model(&models.CallRecording{}).Where("channel = ? AND is_active = ?", req.Channel, true).
+		Updates(map[string]interface{}{
+			"is_active": false,
+			"ended_at":  time.Now(),
+		})
+
+	log.Printf("[Calls] Recording stopped: channel=%s, by=%s", req.Channel, extension)
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"message":      "Call recording stopped",
+		"ami_response": resp,
 	})
 }

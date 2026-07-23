@@ -5,6 +5,7 @@ import { hangup } from '../services/hang';
 import { sendWebSocketMessage } from '../services/websocketservice';
 import JsSIP from 'jssip';
 import { CONFIG } from '../services/config';
+import sipManager from '../services/sipManager';
 
 const VoipPhone = ({
   extension = '',
@@ -67,6 +68,14 @@ const VoipPhone = ({
 
   useEffect(() => {
     if (incomingStream) return; // Skip SIP setup for incoming calls
+
+    // Use sipManager's UA if available to avoid duplicate registrations
+    if (sipManager.ua && sipManager.ua.isConnected()) {
+      uaRef.current = sipManager.ua;
+      setStatus('Registered');
+      return;
+    }
+
     JsSIP.debug.enable('JsSIP:*');
     const socket = new JsSIP.WebSocketInterface(CONFIG.SIP_WS_URL);
     const configuration = {
@@ -87,12 +96,18 @@ const VoipPhone = ({
     uaRef.current.start();
 
     return () => {
-      if (uaRef.current) uaRef.current.stop();
+      // Only stop if we created this UA (not sipManager's)
+      if (uaRef.current && uaRef.current !== sipManager.ua) {
+        uaRef.current.stop();
+      }
     };
   }, [extension, password]);
 
   useEffect(() => {
-    setupWebSocket();
+    const cleanup = setupWebSocket();
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, [setupWebSocket, incomingStream]);
 
   const makeCall = useCallback(async () => {

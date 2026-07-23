@@ -83,16 +83,19 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
   };
 
   const testBackendConnection = async () => {
-    const backendUrl = ipConfigService._resolveBackendUrl(config.backendHost, config.backendPort);
+    const backendUrl = ipConfigService.resolveBackendUrl(config.backendHost, config.backendPort);
     
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
       const response = await fetch(`${backendUrl}/config`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
         },
-        timeout: 5000,
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const data = await response.json();

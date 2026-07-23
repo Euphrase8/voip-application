@@ -8,6 +8,8 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	// Pure Go SQLite driver (no CGO required)
 	_ "modernc.org/sqlite"
 )
 
@@ -49,8 +51,9 @@ func InitDatabase() {
 		&models.Voicemail{},
 		&models.VoicemailGreeting{},
 		&models.MissedCall{},
-		&models.Conference{},
-		&models.ConferenceParticipant{},
+
+		&models.CallRecording{},
+		&models.VoicemailSettings{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)

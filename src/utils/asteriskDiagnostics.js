@@ -1,7 +1,7 @@
 // Asterisk Connection Diagnostics
 // Tool to help diagnose and fix Asterisk connectivity issues
 
-import { healthToast, showToast } from './toastUtils';
+import { showToast } from './toastUtils';
 
 class AsteriskDiagnostics {
   constructor() {

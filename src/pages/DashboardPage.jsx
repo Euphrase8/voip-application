@@ -10,6 +10,7 @@ import {
   FiLogOut as LogOut,
   FiBell as Bell,
   FiMessageSquare as Chat,
+  FiMail as MailIcon,
 } from "react-icons/fi";
 import { Voicemail as VoicemailIcon, Smartphone } from 'lucide-react';
 import toast from "react-hot-toast";
@@ -18,13 +19,13 @@ import SettingsPage from "./SettingsPage";
 import ContactsPage from "./ContactsPage";
 import CallLogsPage from "./CallLogsPage";
 import CallingPage from "./CallingPage";
+import VideoCallPage from "./VideoCallPage";
 import IncomingCallPage from "./IncomingCallPage";
 import SettingsModal from "../components/SettingsModal";
 import NotificationsPage from "./NotificationsPage";
 import ChatPage from "./ChatPage";
 import VoicemailPage from "./VoicemailPage";
 import SoftphoneGuidePage from "./SoftphoneGuidePage";
-import ConferencePage from "./ConferencePage";
 import statusService from "../services/statusService";
 import { getVoicemailUnreadCount } from "../services/voicemail";
 import { getWebSocket } from "../services/websocketservice";
@@ -72,11 +73,12 @@ const initialContacts = [
   },
 ];
 
-const BottomNav = ({ currentPage, onNavigate, isDarkMode }) => {
+const BottomNav = ({ currentPage, onNavigate, isDarkMode, vmUnread }) => {
   const navItems = [
     { id: "keypad", label: "Keypad", icon: Phone },
     { id: "contacts", label: "Contacts", icon: Users },
     { id: "chat", label: "Chat", icon: Chat },
+    { id: "voicemail", label: "VM", icon: MailIcon, badge: vmUnread },
     { id: "calllogs", label: "Call Logs", icon: Clock },
     { id: "notifications", label: "Notifications", icon: Bell },
   ];
@@ -104,7 +106,7 @@ const BottomNav = ({ currentPage, onNavigate, isDarkMode }) => {
               onClick={() => onNavigate(item.id)}
               whileTap={{ scale: 0.95 }}
               className={cn(
-                "flex flex-col items-center p-2 rounded-lg transition-all duration-200 min-w-0 flex-1",
+                "flex flex-col items-center p-2 rounded-lg transition-all duration-200 min-w-0 flex-1 relative",
                 isActive
                   ? cn(
                       "bg-primary-500 text-white",
@@ -118,6 +120,11 @@ const BottomNav = ({ currentPage, onNavigate, isDarkMode }) => {
             >
               <Icon className="w-4 h-4 mb-1 flex-shrink-0" />
               <span className="text-xs font-medium truncate">{item.label}</span>
+              {item.badge !== undefined && item.badge > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full px-1 py-0.5 min-w-[16px] text-center">
+                  {item.badge > 99 ? '99+' : item.badge}
+                </span>
+              )}
             </motion.button>
           );
         })}
@@ -151,7 +158,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     console.log('[Dashboard] Testing status service...');
     console.log('[Dashboard] Current user data:', {
       user,
-      token: localStorage.getItem('token')?.substring(0, 20) + '...',
       username: localStorage.getItem('username'),
       extension: localStorage.getItem('extension')
     });
@@ -297,23 +303,17 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
           }
         } else if (data.type === "voicemail_new") {
           const vm = data.data;
-          toast.success(`📞 New voicemail from ${vm.caller?.username || vm.caller_number || "Unknown"}`, { duration: 5000 });
-          notificationService.addNotification('info', 'New Voicemail', `Voicemail from ${vm.caller?.username || vm.caller_number || "Unknown"}`);
-        } else if (data.type === "incoming_call" || data.type === "webrtc_call_invitation") {
-          if (data.type === "webrtc_call_invitation") {
-            setLocalIncomingCall({
-              from: data.caller_extension,
-              fromUsername: data.caller_username,
-              caller_username: data.caller_username,
-              channel: data.call_id,
-              priority: "normal",
-              transport: "transport-ws",
-              callId: data.call_id,
-              caller_extension: data.caller_extension
+          setVoicemailUnread(prev => prev + 1);
+          toast.success(`New voicemail from ${vm.sender_name || vm.caller?.username || vm.caller_number || "Unknown"}`, { duration: 5000 });
+          notificationService.addNotification('info', 'New Voicemail', `Voicemail from ${vm.sender_name || vm.caller?.username || vm.caller_number || "Unknown"}`);
+          if (Notification.permission === "granted") {
+            new Notification("New Voicemail", {
+              body: `From: ${vm.sender_name || vm.caller?.username || vm.caller_number || "Unknown"}`,
+              icon: "/favicon.ico"
             });
-          } else {
-            setLocalIncomingCall(data);
           }
+        } else if (data.type === "incoming_call" && data.type !== "webrtc_call_invitation") {
+          setLocalIncomingCall(data);
         } else if (data.type === "user_status_changed") {
           setContacts(prev => prev.map(c =>
             c.extension === data.extension
@@ -356,25 +356,35 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     };
   }, []);
 
+  // Fetch all users from backend as dynamic contacts
   useEffect(() => {
-    const fetchUserStatuses = async () => {
+    const fetchContacts = async () => {
       try {
         const data = await (await import("../services/users")).getUsers();
         if (data.success && data.users.length > 0) {
-          setContacts((prev) =>
-            prev.map((contact) => ({
-              ...contact,
-              status: data.users.find((u) => u.extension === contact.extension)?.status || contact.status,
-            }))
+          setContacts(
+            data.users
+              .filter((u) => u.extension !== user?.extension)
+              .map((u) => ({
+                id: u.id,
+                name: u.username,
+                extension: u.extension,
+                status: u.status || "offline",
+                is_online: u.is_online || u.status === "online",
+                avatar: null,
+                isFavorite: false,
+              }))
           );
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn("[Dashboard] Failed to fetch contacts from backend, using fallback");
+      }
     };
 
-    fetchUserStatuses();
-    const interval = setInterval(fetchUserStatuses, 15000);
+    fetchContacts();
+    const interval = setInterval(fetchContacts, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.extension]);
 
   useEffect(() => {
     if (callStatus) {
@@ -655,7 +665,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                   { id: "chat", label: "Messages", icon: Chat },
                   { id: "voicemail", label: "Voicemail", icon: VoicemailIcon, badge: voicemailUnread },
                   { id: "calllogs", label: "Call Logs", icon: Clock },
-                  { id: "conference", label: "Conference", icon: Users },
+                  { id: "video", label: "Video Call", icon: Phone },
                   { id: "softphone", label: "Softphone", icon: Smartphone },
                   { id: "notifications", label: "Notifications", icon: Bell },
                 ].map((item) => {
@@ -695,45 +705,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
             </ResponsiveContainer>
           </nav>
         </motion.aside>
-
-        {/* Incoming Call Modal */}
-        {incomingCall && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl max-w-sm w-full mx-4">
-              <div className="text-center">
-                <div className="mb-4">
-                  <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-2">
-                    <Phone className="w-8 h-8 text-white" />
-                  </div>
-                  <h3 className="text-lg font-semibold">Incoming Call</h3>
-                  <p className="text-gray-600 dark:text-gray-300">
-                    {incomingCall.fromUsername || incomingCall.caller_username || `Extension ${incomingCall.from}`} is calling
-                  </p>
-                </div>
-                <div className="flex space-x-4">
-                  <button
-                    onClick={() => {
-                      incomingCall.onAccept();
-                      setLocalIncomingCall(null);
-                    }}
-                    className="flex-1 bg-green-500 hover:bg-green-600 text-white py-3 px-4 rounded-xl font-medium transition-colors"
-                  >
-                    Accept
-                  </button>
-                  <button
-                    onClick={() => {
-                      incomingCall.onReject();
-                      setLocalIncomingCall(null);
-                    }}
-                    className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 px-4 rounded-xl font-medium transition-colors"
-                  >
-                    Reject
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Main Content */}
         <main className="flex-1 overflow-hidden flex flex-col">
@@ -961,13 +932,13 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                     </div>
                   </div>
                 )}
-                {currentPage === "conference" && (
+                {currentPage === "video" && (
                   <div className="h-full flex flex-col">
                     <div className={cn(
                       "flex-1 overflow-hidden rounded-xl",
                       darkMode ? "bg-secondary-800" : "bg-white"
                     )}>
-                      <ConferencePage darkMode={isDarkMode} onStartCall={(contact) => startCall(contact)} />
+                      <VideoCallPage darkMode={isDarkMode} user={user} onEndCall={() => setCurrentPage('keypad')} />
                     </div>
                   </div>
                 )}
@@ -1046,7 +1017,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
       </div>
 
       {/* Bottom Navigation for Mobile */}
-      <BottomNav currentPage={currentPage} onNavigate={setCurrentPage} isDarkMode={isDarkMode} />
+      <BottomNav currentPage={currentPage} onNavigate={setCurrentPage} isDarkMode={isDarkMode} vmUnread={voicemailUnread} />
 
       {/* Settings Modal */}
       <SettingsModal

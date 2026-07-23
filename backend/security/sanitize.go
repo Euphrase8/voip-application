@@ -42,7 +42,7 @@ func SanitizeMessage(input string) string {
 
 func IsValidExtension(ext string) bool {
 	if ext == "" {
-		return true
+		return false
 	}
 	match, _ := regexp.MatchString(`^\d{4,6}$`, ext)
 	return match

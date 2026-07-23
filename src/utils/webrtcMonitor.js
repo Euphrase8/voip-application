@@ -87,6 +87,8 @@ class WebRTCMonitor {
               this.processConnectionStats(report);
             }
             break;
+          default:
+            break;
         }
       });
 

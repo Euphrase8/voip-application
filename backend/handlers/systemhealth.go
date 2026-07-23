@@ -296,7 +296,7 @@ func checkAsteriskHealthRealTime() ServiceInfo {
 
 	// Check AMI connection
 	client := asterisk.GetAMIClient()
-	asteriskAddr := fmt.Sprintf("%s:%s", config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
+	asteriskAddr := net.JoinHostPort(config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
 	service.Details["asterisk_host"] = asteriskAddr
 
 	// If AMI client isn't ready, fall back to lightweight port checks.
@@ -367,7 +367,7 @@ func checkAsteriskHealth() ServiceInfo {
 
 	// Check AMI connection
 	client := asterisk.GetAMIClient()
-	asteriskAddr := fmt.Sprintf("%s:%s", config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
+	asteriskAddr := net.JoinHostPort(config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
 	service.Details["asterisk_host"] = asteriskAddr
 
 	// If AMI client isn't ready, fall back to lightweight port checks.

@@ -27,6 +27,10 @@ type Hub struct {
 
 	// Callback for when user disconnects (to update database)
 	OnUserDisconnect func(extension string) error
+
+	// Tracks closed send channels to prevent double-close panics
+	closedChannels map[*Client]bool
+	closedMu       sync.Mutex
 }
 
 // Message represents a WebSocket message
@@ -61,7 +65,31 @@ func NewHub() *Hub {
 		unregister:       make(chan *Client),
 		clients:          make(map[*Client]bool),
 		extensionClients: make(map[string][]*Client),
+		closedChannels:   make(map[*Client]bool),
 	}
+}
+
+// markChannelClosed tracks that a client's send channel was closed
+func (h *Hub) markChannelClosed(client *Client) {
+	h.closedMu.Lock()
+	defer h.closedMu.Unlock()
+	h.closedChannels[client] = true
+}
+
+// isChannelClosed checks if a client's send channel was already closed
+func (h *Hub) isChannelClosed(client *Client) bool {
+	h.closedMu.Lock()
+	defer h.closedMu.Unlock()
+	return h.closedChannels[client]
+}
+
+// safeCloseSend safely closes a client's send channel (no panic if already closed)
+func (h *Hub) safeCloseSend(client *Client) {
+	if h.isChannelClosed(client) {
+		return
+	}
+	h.markChannelClosed(client)
+	close(client.send)
 }
 
 // Run starts the hub
@@ -72,14 +100,13 @@ func (h *Hub) Run() {
 			h.mutex.Lock()
 			h.clients[client] = true
 			if client.Extension != "" {
-				// Add client to extension's client list
 				h.extensionClients[client.Extension] = append(h.extensionClients[client.Extension], client)
 				log.Printf("Client registered: %s (extension: %s) - Total clients for extension: %d",
 					client.ID, client.Extension, len(h.extensionClients[client.Extension]))
 			}
 			h.mutex.Unlock()
 
-			// Send welcome message
+			// Send welcome message asynchronously so we don't block registration
 			welcomeMsg := Message{
 				Type:   "welcome",
 				Status: "connected",
@@ -88,8 +115,8 @@ func (h *Hub) Run() {
 				select {
 				case client.send <- data:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					// Don't close from here; let unregister or writePump handle cleanup
+					log.Printf("Welcome message send failed for %s, client will be cleaned up by writePump", client.ID)
 				}
 			}
 
@@ -98,25 +125,21 @@ func (h *Hub) Run() {
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				if client.Extension != "" {
-					// Remove client from extension's client list
 					clients := h.extensionClients[client.Extension]
 					for i, c := range clients {
 						if c == client {
-							// Remove client from slice
 							h.extensionClients[client.Extension] = append(clients[:i], clients[i+1:]...)
 							break
 						}
 					}
-					// If no more clients for this extension, remove the entry and set user offline
 					if len(h.extensionClients[client.Extension]) == 0 {
 						delete(h.extensionClients, client.Extension)
-						// Set user offline in database and broadcast status change
 						go h.SetUserOfflineOnDisconnect(client.Extension)
 					}
 					log.Printf("Client unregistered: %s (extension: %s) - Remaining clients for extension: %d",
 						client.ID, client.Extension, len(h.extensionClients[client.Extension]))
 				}
-				close(client.send)
+				h.safeCloseSend(client)
 			}
 			h.mutex.Unlock()
 
@@ -136,10 +159,9 @@ func (h *Hub) Run() {
 			if len(failedClients) > 0 {
 				h.mutex.Lock()
 				for _, client := range failedClients {
-					close(client.send)
+					h.safeCloseSend(client)
 					delete(h.clients, client)
 					if client.Extension != "" {
-						// Remove from extension clients list
 						clients := h.extensionClients[client.Extension]
 						for i, c := range clients {
 							if c == client {
@@ -147,7 +169,6 @@ func (h *Hub) Run() {
 								break
 							}
 						}
-						// If no more clients for this extension, remove the entry
 						if len(h.extensionClients[client.Extension]) == 0 {
 							delete(h.extensionClients, client.Extension)
 						}
@@ -161,55 +182,60 @@ func (h *Hub) Run() {
 
 // SendToExtension sends a message to all clients of a specific extension
 func (h *Hub) SendToExtension(extension string, message interface{}) error {
-	h.mutex.RLock()
-	clients, exists := h.extensionClients[extension]
-	h.mutex.RUnlock()
-
-	if !exists || len(clients) == 0 {
-		log.Printf("No client found for extension: %s", extension)
-		return fmt.Errorf("no client found for extension: %s", extension)
-	}
-
 	data, err := json.Marshal(message)
 	if err != nil {
 		return err
+	}
+
+	// Collect all data under read lock, then release before any writes
+	h.mutex.RLock()
+	clients, exists := h.extensionClients[extension]
+	clientCopy := make([]*Client, 0)
+	if exists {
+		clientCopy = append(clientCopy, clients...)
+	}
+	h.mutex.RUnlock()
+
+	if !exists || len(clientCopy) == 0 {
+		log.Printf("No client found for extension: %s", extension)
+		return fmt.Errorf("no client found for extension: %s", extension)
 	}
 
 	// Send to all clients for this extension
 	var failedClients []*Client
 	successCount := 0
 
-	h.mutex.RLock()
-	for _, client := range clients {
+	for _, client := range clientCopy {
 		select {
 		case client.send <- data:
 			successCount++
 		default:
-			// Client's send channel is full, mark for removal
 			failedClients = append(failedClients, client)
 		}
 	}
-	h.mutex.RUnlock()
 
-	// Remove failed clients
+	// Remove failed clients (now with full lock since we dropped RLock)
 	if len(failedClients) > 0 {
 		h.mutex.Lock()
 		for _, failedClient := range failedClients {
-			delete(h.clients, failedClient)
-			close(failedClient.send)
-
-			// Remove from extension clients list
-			updatedClients := make([]*Client, 0)
-			for _, client := range h.extensionClients[extension] {
-				if client != failedClient {
-					updatedClients = append(updatedClients, client)
-				}
+			if _, exists := h.clients[failedClient]; !exists {
+				continue
 			}
-			h.extensionClients[extension] = updatedClients
+			delete(h.clients, failedClient)
+			h.safeCloseSend(failedClient)
 
-			// If no more clients for this extension, remove the entry
-			if len(h.extensionClients[extension]) == 0 {
-				delete(h.extensionClients, extension)
+			if fClients, ok := h.extensionClients[extension]; ok {
+				updatedClients := make([]*Client, 0, len(fClients))
+				for _, c := range fClients {
+					if c != failedClient {
+						updatedClients = append(updatedClients, c)
+					}
+				}
+				if len(updatedClients) == 0 {
+					delete(h.extensionClients, extension)
+				} else {
+					h.extensionClients[extension] = updatedClients
+				}
 			}
 		}
 		h.mutex.Unlock()
@@ -220,7 +246,6 @@ func (h *Hub) SendToExtension(extension string, message interface{}) error {
 		return fmt.Errorf("failed to send message to any client for extension %s", extension)
 	}
 
-	log.Printf("Message sent to %d clients for extension %s", successCount, extension)
 	return nil
 }
 

@@ -30,3 +30,24 @@ yarn-error.log*
 # environment files with secrets
 backend/.env
 .env
+
+# compiled binaries
+backend/voip-backend
+backend/voip-backend.exe
+backend/tmp/main
+backend/tmp/main.exe
+*.exe
+
+# log files
+*.log
+backend/backend.log
+backend/backend.err.log
+frontend.err.log
+frontend.log
+
+# build output
+/build
+
+# OS files
+.DS_Store
+Thumbs.db

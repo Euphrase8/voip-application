@@ -9,12 +9,23 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"voip-backend/config"
 
 	"github.com/gin-gonic/gin"
 )
+
+var validBackupID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func sanitizeBackupID(id string) string {
+	if !validBackupID.MatchString(id) {
+		return ""
+	}
+	return id
+}
 
 type BackupRequest struct {
 	IncludeDatabase bool   `json:"include_database"`
@@ -44,7 +55,10 @@ type BackupStatus struct {
 	Error       string     `json:"error,omitempty"`
 }
 
-var activeBackups = make(map[string]*BackupStatus)
+var (
+	activeBackups   = make(map[string]*BackupStatus)
+	activeBackupsMu sync.RWMutex
+)
 
 // CreateBackup creates a new system backup
 func CreateBackup(c *gin.Context) {
@@ -71,7 +85,9 @@ func CreateBackup(c *gin.Context) {
 		Message:   "Initializing backup...",
 		CreatedAt: time.Now(),
 	}
+	activeBackupsMu.Lock()
 	activeBackups[backupID] = status
+	activeBackupsMu.Unlock()
 
 	// Start backup process in goroutine
 	go performBackup(backupID, req, status)
@@ -95,7 +111,9 @@ func GetBackupStatus(c *gin.Context) {
 		return
 	}
 
+	activeBackupsMu.RLock()
 	status, exists := activeBackups[backupID]
+	activeBackupsMu.RUnlock()
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
@@ -173,19 +191,26 @@ func ListBackups(c *gin.Context) {
 
 // DownloadBackup allows downloading a backup file
 func DownloadBackup(c *gin.Context) {
-	backupID := c.Param("id")
+	backupID := sanitizeBackupID(c.Param("id"))
 	log.Printf("[BackupHandler] Download request for backup ID: '%s'", backupID)
 
 	if backupID == "" {
-		log.Printf("[BackupHandler] Empty backup ID received")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "Backup ID required",
+			"error":   "Invalid backup ID",
 		})
 		return
 	}
 
 	backupPath := filepath.Join(getBackupDirectory(), backupID+".zip")
+	// Ensure file is within backup directory
+	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(getBackupDirectory())) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid backup ID",
+		})
+		return
+	}
 	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
@@ -203,17 +228,34 @@ func DownloadBackup(c *gin.Context) {
 
 // DeleteBackup deletes a backup file
 func DeleteBackup(c *gin.Context) {
-	backupID := c.Param("id")
+	backupID := sanitizeBackupID(c.Param("id"))
 	if backupID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "Backup ID required",
+			"error":   "Invalid backup ID",
 		})
 		return
 	}
 
 	backupPath := filepath.Join(getBackupDirectory(), backupID+".zip")
-	if err := os.Remove(backupPath); err != nil {
+	// Prevent path traversal - ensure file is within backup directory
+	cleanPath := filepath.Clean(backupPath)
+	backupDir := filepath.Clean(getBackupDirectory())
+	if !strings.HasPrefix(cleanPath, backupDir) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid backup ID",
+		})
+		return
+	}
+	if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "Backup file not found",
+		})
+		return
+	}
+	if err := os.Remove(cleanPath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   "Failed to delete backup file",
@@ -229,11 +271,11 @@ func DeleteBackup(c *gin.Context) {
 
 // RestoreBackup restores system from a backup
 func RestoreBackup(c *gin.Context) {
-	backupID := c.Param("id")
+	backupID := sanitizeBackupID(c.Param("id"))
 	if backupID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "Backup ID required",
+			"error":   "Invalid backup ID",
 		})
 		return
 	}
@@ -246,7 +288,9 @@ func RestoreBackup(c *gin.Context) {
 		Message:   "Starting restore process...",
 		CreatedAt: time.Now(),
 	}
+	activeBackupsMu.Lock()
 	activeBackups[status.ID] = status
+	activeBackupsMu.Unlock()
 
 	// Start restore process in goroutine
 	go performRestore(backupID, status)
@@ -314,6 +358,12 @@ func performBackup(backupID string, req BackupRequest, status *BackupStatus) {
 	}
 	if req.IncludeCallLogs {
 		totalSteps++
+	}
+
+	if totalSteps == 0 {
+		status.Status = "failed"
+		status.Error = "No components selected for backup"
+		return
 	}
 
 	currentStep := 0
@@ -398,12 +448,117 @@ func backupConfiguration(zipWriter *zip.Writer) error {
 
 // Perform restore process
 func performRestore(backupID string, status *BackupStatus) {
-	// Implementation for restore process
-	// This is a placeholder - full implementation would involve
-	// extracting the backup and restoring components
-	status.Message = "Restore functionality coming soon..."
+	backupPath := filepath.Join(getBackupDirectory(), backupID+".zip")
+
+	// Prevent path traversal - ensure file is within backup directory
+	cleanPath := filepath.Clean(backupPath)
+	backupDir := filepath.Clean(getBackupDirectory())
+	if !strings.HasPrefix(cleanPath, backupDir) {
+		status.Status = "failed"
+		status.Error = "Invalid backup ID"
+		status.Progress = 0
+		return
+	}
+
+	// Check backup file exists
+	if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+		status.Status = "failed"
+		status.Error = fmt.Sprintf("Backup file not found: %s", cleanPath)
+		status.Progress = 0
+		return
+	}
+
+	status.Message = "Opening backup archive..."
+	status.Progress = 10
+
+	reader, err := zip.OpenReader(cleanPath)
+	if err != nil {
+		status.Status = "failed"
+		status.Error = fmt.Sprintf("Failed to open backup: %v", err)
+		status.Progress = 0
+		return
+	}
+	defer reader.Close()
+
+	restoreDir := filepath.Join(".", "restore_"+backupID)
+	if err := os.MkdirAll(restoreDir, 0755); err != nil {
+		status.Status = "failed"
+		status.Error = fmt.Sprintf("Failed to create restore directory: %v", err)
+		status.Progress = 0
+		return
+	}
+	defer os.RemoveAll(restoreDir)
+
+	// Prevent zip slip - ensure all extracted files stay within restoreDir
+	restoreDirClean := filepath.Clean(restoreDir)
+
+	totalFiles := len(reader.File)
+	for i, f := range reader.File {
+		status.Message = fmt.Sprintf("Restoring %s...", f.Name)
+		if totalFiles > 0 {
+			status.Progress = 10 + ((i * 80) / totalFiles)
+		}
+
+		// Prevent zip slip vulnerability: validate that the target path is within restoreDir
+		destPath := filepath.Join(restoreDir, f.Name)
+		if !strings.HasPrefix(filepath.Clean(destPath), restoreDirClean) {
+			log.Printf("[Backup] Skipping file with unsafe path: %s", f.Name)
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			log.Printf("[Backup] Failed to open %s in archive: %v", f.Name, err)
+			continue
+		}
+
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(destPath, 0755)
+			rc.Close()
+			continue
+		}
+
+		// Ensure parent directory exists
+		os.MkdirAll(filepath.Dir(destPath), 0755)
+
+		destFile, err := os.Create(destPath)
+		if err != nil {
+			log.Printf("[Backup] Failed to create %s: %v", destPath, err)
+			rc.Close()
+			continue
+		}
+
+		_, err = io.Copy(destFile, rc)
+		destFile.Close()
+		rc.Close()
+		if err != nil {
+			log.Printf("[Backup] Failed to write %s: %v", destPath, err)
+			continue
+		}
+	}
+
+	status.Message = "Applying restored data..."
+	status.Progress = 95
+
+	// Restore database if present
+	dbPath := filepath.Join(restoreDir, "database.db")
+	if _, err := os.Stat(dbPath); err == nil {
+		src, err := os.Open(dbPath)
+		if err == nil {
+			dst, err := os.Create(config.AppConfig.DBPath + ".restored")
+			if err == nil {
+				io.Copy(dst, src)
+				dst.Close()
+				// Replace original with restored
+				os.Rename(config.AppConfig.DBPath+".restored", config.AppConfig.DBPath)
+			}
+			src.Close()
+		}
+	}
+
 	status.Status = "completed"
 	status.Progress = 100
+	status.Message = "Backup restored successfully. Please restart the server."
 	now := time.Now()
 	status.CompletedAt = &now
 }
@@ -414,6 +569,26 @@ func getBackupDirectory() string {
 }
 
 func readBackupMetadata(backupPath string) *BackupMetadata {
-	// Implementation to read metadata from backup file
+	reader, err := zip.OpenReader(backupPath)
+	if err != nil {
+		return nil
+	}
+	defer reader.Close()
+
+	for _, f := range reader.File {
+		if f.Name == "backup_metadata.json" {
+			rc, err := f.Open()
+			if err != nil {
+				return nil
+			}
+			defer rc.Close()
+
+			var metadata BackupMetadata
+			if err := json.NewDecoder(rc).Decode(&metadata); err != nil {
+				return nil
+			}
+			return &metadata
+		}
+	}
 	return nil
 }

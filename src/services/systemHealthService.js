@@ -25,12 +25,6 @@ class SystemHealthService {
     return token && token !== 'null' && token !== 'undefined' && token.length > 0;
   }
 
-  // Check if user is authenticated
-  isAuthenticated() {
-    const token = localStorage.getItem('token');
-    return token && token !== 'null' && token !== 'undefined';
-  }
-
   // Get comprehensive system health with fast timeout and optimization
   async getSystemHealth() {
     try {

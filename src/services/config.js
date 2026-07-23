@@ -18,15 +18,14 @@ class DynamicConfig {
 
   // Get API URL dynamically
   get API_URL() {
-    // If the app is served over HTTPS (e.g. behind nginx) or via local IP, avoid mixed-content/cors issues
-    // by using same-origin API calls and routing via the reverse proxy.
     if (typeof window !== 'undefined' && window.location) {
       if (window.location.protocol === 'https:' || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
         return window.location.origin;
       }
+      return 'http://localhost:8080';
     }
 
-    return process.env.REACT_APP_API_URL || configService.getApiUrl();
+    return process.env.REACT_APP_API_URL || 'http://localhost:8080';
   }
 
   // Get WebSocket URL dynamically
@@ -37,9 +36,10 @@ class DynamicConfig {
       } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
         return 'ws://' + window.location.host + '/ws';
       }
+      return 'ws://localhost:8080/ws';
     }
 
-    return process.env.REACT_APP_WS_URL || configService.getWebSocketUrl();
+    return process.env.REACT_APP_WS_URL || 'ws://localhost:8080/ws';
   }
 
   // Get Asterisk SIP server dynamically
@@ -60,8 +60,9 @@ class DynamicConfig {
       } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
         return 'ws://' + window.location.host + '/asterisk-ws';
       }
+      return 'ws://localhost:8088/ws';
     }
-    return process.env.REACT_APP_SIP_WS_URL || configService.getAsteriskWebSocketUrl();
+    return process.env.REACT_APP_SIP_WS_URL || 'ws://localhost:8088/ws';
   }
 
   // Get Asterisk host

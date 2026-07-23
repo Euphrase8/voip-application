@@ -70,7 +70,7 @@ class IPConfigService {
   }
 
   // Helper to resolve backend URL with correct protocol (HTTPS if page is HTTPS)
-  _resolveBackendUrl(host, port) {
+  resolveBackendUrl(host, port) {
     if (!host) return '';
     
     // If host already contains protocol, return it
@@ -91,7 +91,7 @@ class IPConfigService {
   // Get backend URL
   getBackendUrl() {
     const config = this.getConfig();
-    return this._resolveBackendUrl(config.backendHost, config.backendPort);
+    return this.resolveBackendUrl(config.backendHost, config.backendPort);
   }
 
   // Get backend WebSocket URL
@@ -145,7 +145,7 @@ class IPConfigService {
   // Test backend connection
   async testBackendConnection(config = null) {
     const testConfig = config || this.getConfig();
-    const backendUrl = this._resolveBackendUrl(testConfig.backendHost, testConfig.backendPort);
+    const backendUrl = this.resolveBackendUrl(testConfig.backendHost, testConfig.backendPort);
     
     try {
       const controller = new AbortController();
@@ -196,7 +196,7 @@ class IPConfigService {
 
     try {
       // Test through backend API instead of direct connection
-      const backendUrl = this._resolveBackendUrl(testConfig.backendHost, testConfig.backendPort);
+      const backendUrl = this.resolveBackendUrl(testConfig.backendHost, testConfig.backendPort);
 
       // Get auth token from localStorage (optional for initial configuration)
       const token = localStorage.getItem('token');

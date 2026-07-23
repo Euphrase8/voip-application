@@ -62,11 +62,14 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	userResponse := user.ToResponse()
+
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Login successful",
-		"token":   token,
-		"user":    user.ToResponse(),
+		"success":      true,
+		"message":      "Login successful",
+		"token":        token,
+		"user":         userResponse,
+		"sip_password": user.SIPPassword,
 	})
 }
 
@@ -153,9 +156,10 @@ func Register(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"success": true,
-		"message": "User registered successfully",
-		"user":    user.ToResponse(),
+		"success":      true,
+		"message":      "User registered successfully",
+		"user":         user.ToResponse(),
+		"sip_password": user.SIPPassword,
 	})
 }
 

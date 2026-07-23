@@ -244,7 +244,7 @@ func SendGroupMessage(c *gin.Context) {
 	msg := models.ChatGroupMessage{
 		GroupID:  req.GroupID,
 		SenderID: userID.(uint),
-		Content:  req.Content,
+		Content:  security.SanitizeMessage(req.Content),
 	}
 
 	db := database.GetDB()
@@ -312,6 +312,9 @@ func GetUserGroups(c *gin.Context) {
 }
 
 func SendVoiceMessage(c *gin.Context) {
+	// Limit request body to 10MB
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
+
 	userID, _ := c.Get("user_id")
 	ensureMessageVoiceDir()
 

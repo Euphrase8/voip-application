@@ -57,7 +57,7 @@ func LoadConfig() {
 	AppConfig = &Config{
 		Port:                getEnv("PORT", "8080"),
 		Host:                getEnv("HOST", "0.0.0.0"),
-		JWTSecret:           getEnv("JWT_SECRET", "default-secret-change-this"),
+		JWTSecret:           getEnv("JWT_SECRET", ""),
 		JWTExpiryHours:      getEnvAsInt("JWT_EXPIRY_HOURS", 24),
 		DBPath:              getEnv("DB_PATH", "./voip.db"),
 		AsteriskHost:        getEnv("ASTERISK_HOST", "asterisk.local"),
@@ -73,9 +73,18 @@ func LoadConfig() {
 		PublicHost:          getEnv("PUBLIC_HOST", ""),
 	}
 
-	// Resolve dynamic configurations
-	AppConfig.resolveHosts()
+	// Resolve dynamic configurations (skip in test environment)
+	if AppConfig.Environment != "test" {
+		AppConfig.resolveHosts()
+	}
 	AppConfig.configureCORS()
+
+	if AppConfig.JWTSecret == "" {
+		log.Fatal("JWT_SECRET environment variable is required. Set a strong random value. Do NOT use a default.")
+	}
+	if AppConfig.JWTSecret == "default-secret-change-this" || AppConfig.JWTSecret == "changeme-in-production-use-random-64-char-hex-string" {
+		log.Fatal("JWT_SECRET is still set to a known default. Generate a new random value immediately.")
+	}
 
 	log.Printf("Config loaded: Server will run on %s:%s", AppConfig.Host, AppConfig.Port)
 }

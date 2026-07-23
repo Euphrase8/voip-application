@@ -299,7 +299,7 @@ export const buildSpinnerClass = (size = 'md', variant = 'primary', className = 
 };
 
 // Export all utilities
-export default {
+const styles = {
   buttonStyles,
   inputStyles,
   cardStyles,
@@ -319,3 +319,5 @@ export default {
   buildNotificationClass,
   buildSpinnerClass,
 };
+
+export default styles;

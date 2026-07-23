@@ -111,7 +111,7 @@ export const generateExampleUnderstandingLogs = () => {
   // Feature usage examples
   understandingLogger.logFeatureUsage('speed_dial', 'frequent', 0.85);
   understandingLogger.logFeatureUsage('call_recording', 'occasional', 0.6);
-  understandingLogger.logFeatureUsage('conference_call', 'rare', 0.3);
+  understandingLogger.logFeatureUsage('video_call', 'occasional', 0.5);
 
   // User feedback examples
   understandingLogger.logUserFeedback(5, 'Great call quality today!', 'call_quality');

@@ -4,7 +4,7 @@ import clsx from 'clsx';
  * Utility function to combine class names
  */
 export const cn = (...classes) => {
-  return clsx(classes);
+  return clsx(...classes);
 };
 
 /**

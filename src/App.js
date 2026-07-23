@@ -17,7 +17,7 @@ import Loader from './components/loader';
 import { initializeSIP } from './services/call';
 import CONFIG from './services/config';
 import VoipPhone from './components/VoipPhone';
-import IncomingCallListener from './pages/IncomingCallListener';
+
 import BrowserCompatibilityAlert from './components/BrowserCompatibilityAlert';
 import MicrophoneFix from './components/MicrophoneFix';
 import MicrophoneTroubleshooter from './components/MicrophoneTroubleshooter';
@@ -151,7 +151,7 @@ const App = () => {
     if (result.success) {
       localStorage.setItem('token', result.token);
       localStorage.setItem('extension', result.user?.extension);
-      localStorage.setItem('sipPassword', `password${result.user?.extension}`);
+      localStorage.setItem('sipPassword', result.sip_password || `password${result.user?.extension}`);
       localStorage.setItem('userRole', result.user?.role || 'user');
       localStorage.setItem('user_id', result.user?.id?.toString() || '');
       const extension = result.user?.extension;
@@ -166,7 +166,7 @@ const App = () => {
         extension,
         role
       });
-      setSipPassword(`password${extension}`);
+      setSipPassword(result.sip_password || `password${extension}`);
       initializeConnection(extension);
 
       // Check microphone access after login
@@ -250,7 +250,7 @@ const App = () => {
             extension={user.extension}
             sipPassword={sipPassword}
           /> */}
-          <IncomingCallListener /> {/* Add IncomingCallListener here */}
+
         </>
       )}
       <Routes>
@@ -322,7 +322,13 @@ const App = () => {
         />
         <Route
           path="/calling"
-          element={<Navigate to="/dashboard" replace />}
+          element={token ? <VoipPhone
+            extension={user?.extension || ''}
+            sipPassword={sipPassword}
+            darkMode={darkMode}
+            toggleDarkMode={() => setDarkMode(!darkMode)}
+            setIsLoading={setIsLoading}
+          /> : <Navigate to="/login" replace />}
         />
         <Route
           path="/webrtc-test"
@@ -339,9 +345,6 @@ const App = () => {
         } />
       </Routes>
       {isLoading && <Loader />}
-
-      {/* Browser Compatibility Alert */}
-      <BrowserCompatibilityAlert darkMode={darkMode} />
 
       {/* Microphone Fix Dialog */}
       <MicrophoneFix

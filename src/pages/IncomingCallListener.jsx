@@ -1,13 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
   FiPhone as Phone,
   FiPhoneOff as PhoneOff,
-  FiUser,
-  FiMic,
-  FiMicOff
 } from 'react-icons/fi';
-import { connectWebSocket, sendWebSocketMessage } from '../services/websocketservice';
+import { connectWebSocket, sendWebSocketMessage, addMessageListener } from '../services/websocketservice';
 import { answerCall } from '../services/call';
 import webrtcCallService from '../services/webrtcCallService';
 import { hangupCall as comprehensiveHangup } from '../services/hangupService';
@@ -15,7 +12,6 @@ import { getInitials } from '../utils/ui';
 
 const IncomingCallListener = ({ user, onCallAccepted, onCallRejected }) => {
   const [callInfo, setCallInfo] = useState(null);
-  const [ws, setWs] = useState(null);
   const [isAnswering, setIsAnswering] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
   const [error, setError] = useState(null);
@@ -23,43 +19,28 @@ const IncomingCallListener = ({ user, onCallAccepted, onCallRejected }) => {
   const timeoutRef = useRef(null);
 
   useEffect(() => {
-    const connect = () => {
-      const websocket = connectWebSocket();
-      setWs(websocket);
+    connectWebSocket();
 
-      websocket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          console.log('[IncomingCallListener] Received message:', message);
-
-          if (message.type === 'incoming_call') {
-            setCallInfo({
-              caller: message.caller,
-              channel: message.channel,
-              priority: message.priority || 'normal',
-              transport: message.transport || 'transport-ws',
-            });
-          } else if (message.type === 'call_ended' || message.type === 'hangup') {
-            // Clear incoming call UI when call is ended by the other party
-            console.log('[IncomingCallListener] Call ended, clearing incoming call UI');
-            setCallInfo(null);
-          }
-        } catch (err) {
-          console.error('❌ Invalid message format:', event.data);
+    const handleMessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'incoming_call') {
+          setCallInfo({
+            caller: message.caller,
+            channel: message.channel,
+            priority: message.priority || 'normal',
+            transport: message.transport || 'transport-ws',
+          });
+        } else if (message.type === 'call_ended' || message.type === 'hangup') {
+          setCallInfo(null);
         }
-      };
-
-      websocket.onclose = () => {
-        console.warn('⚠️ WebSocket closed. Reconnecting in 5s...');
-        setTimeout(connect, 5000);
-      };
+      } catch (err) {
+        console.error('Invalid message format:', event.data);
+      }
     };
 
-    connect();
-
-    return () => {
-      if (ws) ws.close();
-    };
+    const removeListener = addMessageListener(handleMessage);
+    return removeListener;
   }, []);
 
   // Start ringtone when call comes in
@@ -128,17 +109,14 @@ const IncomingCallListener = ({ user, onCallAccepted, onCallRejected }) => {
         console.log('[IncomingCallListener] Answering SIP call');
         const { stream } = await answerCall(callInfo.channel);
 
-        if (ws) {
-          await sendWebSocketMessage({
-            type: 'answer_call',
-            channel: callInfo.channel,
-            extension: callInfo.caller,
-            transport: callInfo.transport,
-          });
-        }
-      }
+        await sendWebSocketMessage({
+          type: 'answer_call',
+          channel: callInfo.channel,
+          extension: callInfo.caller,
+          transport: callInfo.transport,
+        });
 
-      // Dispatch event for DashboardPage to handle
+        // Dispatch event for DashboardPage to handle
       window.dispatchEvent(new CustomEvent('incomingCallAccepted', {
         detail: {
           contact: { extension: callInfo.caller, name: `Ext ${callInfo.caller}` },
@@ -189,12 +167,10 @@ const IncomingCallListener = ({ user, onCallAccepted, onCallRejected }) => {
       } else {
         // Handle SIP call rejection
         console.log('[IncomingCallListener] Rejecting SIP call');
-        if (ws) {
-          await sendWebSocketMessage({
-            type: 'hangup_call',
-            channel: callInfo.channel,
-          });
-        }
+        await sendWebSocketMessage({
+          type: 'hangup_call',
+          channel: callInfo.channel,
+        });
 
         // Also try comprehensive hangup
         try {

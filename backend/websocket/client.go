@@ -6,7 +6,10 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
+	"voip-backend/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -30,10 +33,79 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		// Allow connections from any origin in development
-		// In production, you should check the origin properly
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		// Check against configurable origins from AppConfig
+		if config.AppConfig != nil {
+			for _, allowed := range config.AppConfig.CORSOrigins {
+				if strings.EqualFold(origin, allowed) {
+					return true
+				}
+			}
+		}
+		// Also allow file:// and capacitor:// for development
+		if strings.HasPrefix(origin, "file://") || strings.HasPrefix(origin, "capacitor://") {
+			return true
+		}
+		log.Printf("[WS] Rejected connection from origin: %s", origin)
+		return false
 	},
+}
+
+// rate limiter for WebSocket connections
+var (
+	wsRateLimiters = make(map[string]*wsRateLimiter)
+	wsRateMu       sync.Mutex
+)
+
+type wsRateLimiter struct {
+	count    int
+	lastSeen time.Time
+}
+
+func checkWSRateLimit(ip string) bool {
+	wsRateMu.Lock()
+	defer wsRateMu.Unlock()
+
+	now := time.Now()
+	rl, exists := wsRateLimiters[ip]
+
+	if !exists || now.Sub(rl.lastSeen) > time.Minute {
+		wsRateLimiters[ip] = &wsRateLimiter{
+			count:    1,
+			lastSeen: now,
+		}
+		return true
+	}
+
+	if rl.count >= 20 {
+		log.Printf("[WS] Rate limit exceeded for IP: %s", ip)
+		return false
+	}
+
+	rl.count++
+	rl.lastSeen = now
+	return true
+}
+
+// init starts periodic cleanup of stale rate limiters
+func init() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			wsRateMu.Lock()
+			now := time.Now()
+			for ip, rl := range wsRateLimiters {
+				if now.Sub(rl.lastSeen) > 10*time.Minute {
+					delete(wsRateLimiters, ip)
+				}
+			}
+			wsRateMu.Unlock()
+		}
+	}()
 }
 
 // Client is a middleman between the websocket connection and the hub
@@ -285,11 +357,27 @@ func HandleWebSocket(c *gin.Context) {
 		return
 	}
 
+	// Check for IP rate limiting
+	clientIP := c.ClientIP()
+	if !checkWSRateLimit(clientIP) {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Rate limit exceeded"})
+		return
+	}
+
+	// Check for duplicate connections (max 3 per extension)
+	hub := GetHub()
+	if hub != nil {
+		clientCount := hub.GetExtensionClientCount(extension)
+		if clientCount >= 3 {
+			log.Printf("[WS] Too many connections for extension %s: %d", extension, clientCount)
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many connections for this extension"})
+			return
+		}
+	}
+
 	// Optional: Validate token for authenticated connections
 	token := c.Query("token")
 	if token != "" {
-		// TODO: Add token validation here if needed
-		// For now, we'll allow connections with extension parameter
 		log.Printf("WebSocket connection with token for extension: %s", extension)
 	}
 
@@ -300,7 +388,7 @@ func HandleWebSocket(c *gin.Context) {
 	}
 
 	client := &Client{
-		hub:       GetHub(),
+		hub:       hub,
 		conn:      conn,
 		send:      make(chan []byte, 256),
 		ID:        generateClientID(),

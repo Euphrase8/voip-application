@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"voip-backend/config"
 )
@@ -46,7 +47,7 @@ var amiClient *AMIClient
 var amiMutex sync.Mutex
 
 // Track whether AMI has ever connected successfully
-var amiEverConnected bool
+var amiEverConnected atomic.Bool
 
 // InitAMI initializes the AMI connection with retry logic
 func InitAMI() error {
@@ -69,7 +70,7 @@ func InitAMI() error {
 	}
 
 	amiClient = client
-	amiEverConnected = true
+	amiEverConnected.Store(true)
 	go amiClient.handleEvents()
 	go amiClient.startHealthMonitoring()
 
@@ -77,25 +78,38 @@ func InitAMI() error {
 	return nil
 }
 
-// startReconnectionLoop continuously tries to reconnect
+// startReconnectionLoop continuously tries to reconnect with exponential backoff
 func startReconnectionLoop() {
+	attempt := 0
 	for {
-		time.Sleep(10 * time.Second) // Wait 10 seconds between attempts
+		attempt++
+		backoff := time.Duration(30) * time.Second
+		if attempt > 10 {
+			backoff = 5 * time.Minute
+		} else if attempt > 5 {
+			backoff = 2 * time.Minute
+		} else if attempt > 3 {
+			backoff = 1 * time.Minute
+		}
+
+		time.Sleep(backoff)
 
 		amiMutex.Lock()
 		isConnected := amiClient != nil && amiClient.IsConnected()
 		amiMutex.Unlock()
 
 		if isConnected {
-			return // Connection restored, exit loop
+			return
 		}
 
-		log.Println("Attempting to reconnect AMI...")
+		log.Printf("[AMI] Reconnect attempt %d...", attempt)
 		if err := reconnectAMI(); err != nil {
-			log.Printf("AMI reconnection failed: %v", err)
+			if attempt <= 5 || attempt%5 == 0 {
+				log.Printf("[AMI] Reconnection failed (attempt %d): %v", attempt, err)
+			}
 		} else {
-			log.Println("AMI reconnection successful")
-			amiEverConnected = true
+			log.Println("[AMI] Reconnection successful")
+			amiEverConnected.Store(true)
 			return
 		}
 	}
@@ -117,7 +131,7 @@ func reconnectAMI() error {
 	}
 
 	amiClient = client
-	amiEverConnected = true
+	amiEverConnected.Store(true)
 	go amiClient.handleEvents()
 	go amiClient.startHealthMonitoring()
 
@@ -126,10 +140,10 @@ func reconnectAMI() error {
 
 // NewAMIClient creates a new AMI client
 func NewAMIClient() (*AMIClient, error) {
-	address := fmt.Sprintf("%s:%s", config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
+	address := net.JoinHostPort(config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
 
 	log.Printf("Attempting to connect to Asterisk AMI at %s...", address)
-	conn, err := net.DialTimeout("tcp", address, 5*time.Second) // Reduced timeout to 5 seconds
+	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Asterisk AMI at %s: %v", address, err)
 	}

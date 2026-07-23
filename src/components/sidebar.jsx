@@ -1,16 +1,33 @@
-import { Phone, Favorite, Contacts, History, Call, AdminPanelSettings } from "@mui/icons-material";
+import { useState, useEffect } from "react";
+import { Phone, Favorite, Contacts, History, Call, AdminPanelSettings, Voicemail, Video } from "lucide-react";
+import { getVoicemailUnreadCount } from "../services/voicemail";
 
 const Sidebar = ({ currentPage, onNavigate, darkMode, user }) => {
+  const [vmUnread, setVmUnread] = useState(0);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await getVoicemailUnreadCount();
+        if (data.success) setVmUnread(data.unread_count);
+      } catch (e) {}
+    };
+    load();
+    const interval = setInterval(load, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
   const navItems = [
     { id: "keypad", label: "Keypad", icon: <Phone /> },
     { id: "favorites", label: "Favorites", icon: <Favorite /> },
     { id: "contacts", label: "Contacts", icon: <Contacts /> },
     { id: "calllogs", label: "Call Logs", icon: <History /> },
-    { id: "callings", label: "Register", icon: <Call /> }, // New item for Calling page
+    { id: "callings", label: "Register", icon: <Call /> },
+    { id: "voicemail", label: "Voicemail", icon: <Voicemail />, badge: vmUnread },
+    { id: "video", label: "Video Call", icon: <Video /> },
   ];
 
-  // Add admin panel option if user is admin
-  if (user?.role === 'admin') {
+  if (user?.role === "admin") {
     navItems.push({ id: "admin", label: "Admin Panel", icon: <AdminPanelSettings /> });
   }
 
@@ -38,7 +55,12 @@ const Sidebar = ({ currentPage, onNavigate, darkMode, user }) => {
             aria-label={`Navigate to ${item.label}`}
           >
             {item.icon}
-            <span className="text-sm font-medium">{item.label}</span>
+            <span className="text-sm font-medium flex-1 text-left">{item.label}</span>
+            {item.badge !== undefined && item.badge > 0 && (
+              <span className="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[18px] text-center">
+                {item.badge}
+              </span>
+            )}
           </button>
         ))}
       </div>

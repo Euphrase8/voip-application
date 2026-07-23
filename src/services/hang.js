@@ -1,7 +1,6 @@
 import axios from 'axios';
 import { getToken } from './login';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://192.168.1.2:8080';
+import CONFIG from './config';
 
 export const hangup = async (channel) => {
   try {
@@ -13,7 +12,7 @@ export const hangup = async (channel) => {
     }
 
     const response = await axios.post(
-      `${API_URL}/protected/call/hangup`,
+      `${CONFIG.API_URL}/protected/call/hangup`,
       { channel },
       {
         headers: {

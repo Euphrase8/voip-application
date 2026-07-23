@@ -210,7 +210,7 @@ func GetSystemStats(c *gin.Context) {
 
 	// Count total calls today
 	var callsToday int64
-	database.GetDB().Model(&models.CallLog{}).Where("DATE(created_at) = DATE(NOW())").Count(&callsToday)
+	database.GetDB().Model(&models.CallLog{}).Where("DATE(created_at) = DATE('now')").Count(&callsToday)
 
 	// Get WebSocket connections
 	hub := websocket.GetHub()
@@ -612,13 +612,13 @@ func CreateUser(c *gin.Context) {
 	}
 
 	user := models.User{
-		Username:  req.Username,
-		Email:     req.Email,
-		Password:  string(hashedPassword),
-		Extension: extension,
-		Status:    "offline",
-		Role:      req.Role,
-		IsOnline:  false,
+		Username:    req.Username,
+		Email:       req.Email,
+		Password:    string(hashedPassword),
+		Extension:   extension,
+		Status:      "offline",
+		Role:        req.Role,
+		IsOnline:    false,
 	}
 
 	if err := database.GetDB().Create(&user).Error; err != nil {
@@ -629,9 +629,10 @@ func CreateUser(c *gin.Context) {
 	log.Printf("Admin created new user: %s (extension: %s, role: %s)", user.Username, user.Extension, user.Role)
 
 	c.JSON(http.StatusCreated, gin.H{
-		"success": true,
-		"message": "User created successfully",
-		"user":    user.ToResponse(),
+		"success":      true,
+		"message":      "User created successfully",
+		"user":         user.ToResponse(),
+		"sip_password": user.SIPPassword,
 	})
 }
 

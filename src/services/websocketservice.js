@@ -7,32 +7,37 @@ let currentExtension = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL = 5000;
 
-export const connectWebSocket = (extension = null, url = CONFIG.WS_URL) => {
-  // Use provided extension or get from localStorage
-  const targetExtension = extension || localStorage.getItem('extension');
+// Event listener system for WebSocket messages
+const messageListeners = new Set();
 
-  if (socket && socket.readyState === WebSocket.OPEN && currentExtension === targetExtension) {
-    console.log('[websocketservice] WebSocket already open for extension:', targetExtension);
-    return socket;
-  }
+const notifyListeners = (event) => {
+  messageListeners.forEach(listener => {
+    try {
+      listener(event);
+    } catch (err) {
+      console.error('[websocketservice] Listener error:', err);
+    }
+  });
+};
 
-  // Close existing connection if extension changed
-  if (socket && currentExtension !== targetExtension) {
-    console.log('[websocketservice] Extension changed, closing existing connection');
-    socket.close();
-    socket = null;
-  }
+export const addMessageListener = (listener) => {
+  messageListeners.add(listener);
+  return () => messageListeners.delete(listener);
+};
 
-  currentExtension = targetExtension;
-  const wsUrl = targetExtension ? `${url}?extension=${encodeURIComponent(targetExtension)}` : url;
+export const removeMessageListener = (listener) => {
+  messageListeners.delete(listener);
+};
 
-  console.log(`[websocketservice] Connecting WebSocket to ${wsUrl}`);
-  socket = new WebSocket(wsUrl);
+const setupSocketHandlers = () => {
+  if (!socket) return;
+
+  socket.onmessage = (event) => {
+    notifyListeners(event);
+  };
 
   socket.onopen = () => {
     console.log(`[websocketservice] ✅ WebSocket connected for extension ${currentExtension || 'unknown'}`);
-    console.log(`[websocketservice] WebSocket URL: ${wsUrl}`);
-    console.log(`[websocketservice] WebSocket readyState: ${socket.readyState}`);
     reconnectAttempts = 0;
     if (reconnectTimeout) {
       clearTimeout(reconnectTimeout);
@@ -56,6 +61,28 @@ export const connectWebSocket = (extension = null, url = CONFIG.WS_URL) => {
       console.error('[websocketservice] Max reconnect attempts reached. Giving up.');
     }
   };
+};
+
+let url = CONFIG.WS_URL;
+
+export const connectWebSocket = (extension = null, wsUrl = CONFIG.WS_URL) => {
+  url = wsUrl;
+  const targetExtension = extension || localStorage.getItem('extension');
+
+  if (socket && socket.readyState === WebSocket.OPEN && currentExtension === targetExtension) {
+    return socket;
+  }
+
+  if (socket && currentExtension !== targetExtension) {
+    socket.close();
+    socket = null;
+  }
+
+  currentExtension = targetExtension;
+  const fullUrl = targetExtension ? `${url}?extension=${encodeURIComponent(targetExtension)}` : url;
+
+  socket = new WebSocket(fullUrl);
+  setupSocketHandlers();
 
   return socket;
 };

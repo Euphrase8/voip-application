@@ -14,6 +14,7 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
   const audioContextRef = useRef(null);
   const timerRef = useRef(null);
   const callHandlerRef = useRef(null);
+  const callAcceptedRef = useRef(false);
 
 
   const caller = useMemo(() => {
@@ -53,6 +54,7 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
       acceptCall: async () => {
         try {
           // Update UI to show connection status
+          callAcceptedRef.current = true;
           setCallAccepted(true);
           setConnectionStatus('Connecting to extension...');
 
@@ -179,7 +181,7 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
       setTimeLeft((prev) => {
         if (prev <= 1) {
           // Only reject if call hasn't been accepted yet
-          if (!callAccepted) {
+          if (!callAcceptedRef.current) {
             handleReject();
           }
           return 0;
@@ -230,6 +232,7 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
       timerRef.current = null;
     }
 
+    callAcceptedRef.current = false;
     setIsLoading(true);
     try {
       await callHandlerRef.current.rejectCall();

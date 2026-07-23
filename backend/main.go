@@ -1,13 +1,19 @@
 package main
 
 import (
+	"context"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 	"voip-backend/asterisk"
 	"voip-backend/config"
 	"voip-backend/database"
 	"voip-backend/handlers"
 	"voip-backend/middleware"
+	"voip-backend/services"
 	"voip-backend/websocket"
 
 	"github.com/gin-contrib/cors"
@@ -31,15 +37,8 @@ func main() {
 		hub.OnUserDisconnect = handlers.SetUserOfflineByExtension
 	}
 
-	// Start background status cleanup
-	go func() {
-		ticker := time.NewTicker(2 * time.Minute) // Run every 2 minutes
-		defer ticker.Stop()
-
-		for range ticker.C {
-			handlers.CleanupStaleUsers()
-		}
-	}()
+	// Start background status cleanup service
+	services.InitStatusCleanup()
 
 	// Initialize Asterisk AMI connection asynchronously with timeout
 	go func() {
@@ -219,11 +218,15 @@ func main() {
 		{
 			voicemailRoutes.POST("/create", handlers.CreateVoicemail)
 			voicemailRoutes.GET("/list", handlers.GetVoicemails)
+			voicemailRoutes.GET("/search", handlers.SearchVoicemails)
 			voicemailRoutes.GET("/unread-count", handlers.GetVoicemailUnreadCount)
 			voicemailRoutes.GET("/:id", handlers.GetVoicemail)
 			voicemailRoutes.PUT("/:id/read", handlers.MarkVoicemailRead)
+			voicemailRoutes.PUT("/:id/unread", handlers.MarkVoicemailUnread)
 			voicemailRoutes.DELETE("/:id", handlers.DeleteVoicemail)
 			voicemailRoutes.GET("/:id/audio", handlers.GetVoicemailAudio)
+			voicemailRoutes.GET("/:id/download", handlers.DownloadVoicemail)
+			voicemailRoutes.POST("/:id/playback", handlers.IncrementPlaybackCount)
 		}
 
 		// Missed calls
@@ -234,16 +237,20 @@ func main() {
 		protected.POST("/voicemail-greeting", handlers.UploadVoicemailGreeting)
 		protected.GET("/voicemail-greeting/play", handlers.GetVoicemailGreeting)
 
-		// Conference routes
-		conferenceRoutes := protected.Group("/conference")
+		// Call management routes (transfer, hold, etc.)
+		callManagementRoutes := protected.Group("/call")
 		{
-			conferenceRoutes.POST("/create", handlers.CreateConference)
-			conferenceRoutes.GET("/list", handlers.ListConferences)
-			conferenceRoutes.GET("/:id", handlers.GetConference)
-			conferenceRoutes.POST("/join", handlers.JoinConference)
-			conferenceRoutes.POST("/:id/leave", handlers.LeaveConference)
-			conferenceRoutes.POST("/:id/end", handlers.EndConference)
+			callManagementRoutes.POST("/transfer", handlers.TransferCall)
+			callManagementRoutes.POST("/hold", handlers.HoldCall)
+			callManagementRoutes.POST("/unhold", handlers.UnholdCall)
+			callManagementRoutes.POST("/record/start", handlers.StartCallRecording)
+			callManagementRoutes.POST("/record/stop", handlers.StopCallRecording)
 		}
+
+		// Voicemail greetings and settings
+		protected.POST("/voicemail/settings", handlers.UpdateVoicemailSettings)
+		protected.GET("/voicemail/settings", handlers.GetVoicemailSettings)
+		protected.DELETE("/voicemail/greeting", handlers.DeleteVoicemailGreeting)
 
 		// Diagnostic routes
 		protected.GET("/diagnostics", handlers.GetSystemDiagnostics)
@@ -296,6 +303,11 @@ func main() {
 			admin.GET("/health", handlers.GetSystemHealth)
 			admin.GET("/health/fast", handlers.GetFastSystemHealth)
 
+			// Admin call management (frontend adminService.js integration)
+			admin.POST("/call", handlers.AdminInitiateCall)
+			admin.GET("/active-calls", handlers.AdminGetActiveCalls)
+			admin.POST("/terminate-call", handlers.AdminTerminateCall)
+
 			// Backup endpoints
 			admin.POST("/backup", handlers.CreateBackup)
 			admin.GET("/backup/status/:id", handlers.GetBackupStatus)
@@ -312,7 +324,32 @@ func main() {
 	log.Printf("Debug mode: %v", config.AppConfig.Debug)
 	log.Printf("CORS origins: %v", config.AppConfig.CORSOrigins)
 
-	if err := r.Run(address); err != nil {
-		log.Fatal("Failed to start server:", err)
+	srv := &http.Server{
+		Addr:    address,
+		Handler: r,
 	}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal for graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	database.CloseDB()
+	log.Println("Server exited")
 }
