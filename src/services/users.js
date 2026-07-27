@@ -8,27 +8,36 @@ const WS_URL = CONFIG.WS_URL;
 export const getUsers = async () => {
   try {
     const token = getToken();
+    if (!token) {
+      return { success: false, users: [], error: 'No authentication token. Please login again.' };
+    }
     const response = await axios.get(`${API_URL}/protected/users`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
+      timeout: 10000,
     });
 
-    if (response.data.success && response.data.users) {
-      const users = response.data.users.map(u => ({
+    if (response.data && response.data.success !== false) {
+      const users = (response.data.users || []).map(u => ({
         id: u.id,
         username: u.username,
         extension: u.extension,
         status: u.status || 'offline',
-        is_online: u.is_online,
-        role: u.role,
+        is_online: u.is_online || false,
+        role: u.role || 'user',
+        email: u.email || '',
+        name: u.username,
       }));
       return { success: true, users };
     }
-    return { success: false, users: [] };
+    return { success: false, users: [], error: response.data?.error || 'Invalid response from server' };
   } catch (error) {
-    console.error('[users.js] Error fetching users:', error);
-    return { success: false, users: [], error: error.message };
+    const message = error.response?.status === 401
+      ? 'Session expired. Please login again.'
+      : error.response?.data?.error || error.message || 'Failed to load contacts';
+    console.error('[users.js] Error fetching users:', message);
+    return { success: false, users: [], error: message };
   }
 };
 

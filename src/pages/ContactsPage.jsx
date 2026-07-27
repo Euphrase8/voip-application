@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -7,8 +7,10 @@ import {
   FiUser as User,
   FiUsers as Users,
   FiPhoneCall as PhoneCall,
-  FiStar as Star,
-  FiMoreVertical as MoreVertical
+  FiVideo as Video,
+  FiMessageSquare as Chat,
+  FiMail as VoicemailIcon,
+  FiRefreshCw as RefreshIcon
 } from 'react-icons/fi';
 import { getUsers } from '../services/users';
 import { getExtension } from '../services/login';
@@ -17,15 +19,12 @@ import { useTheme } from '../contexts/ThemeContext';
 import { cn, getInitials, getAvatarColor } from '../utils/ui';
 import toast from 'react-hot-toast';
 import {
-  ResponsiveContainer,
-  ResponsiveGrid,
-  ResponsiveCard,
   ResponsiveText,
   ResponsiveFlex,
   ResponsiveButton
 } from '../components/ResponsiveLayout';
 
-const Contact = ({ contact, onCall, darkMode }) => {
+const Contact = ({ contact, onCall, onVideoCall, onChat, onVoicemail, darkMode }) => {
   const { darkMode: themeDarkMode } = useTheme();
   const isDark = darkMode || themeDarkMode;
   const isOnline = contact.status === 'online';
@@ -38,7 +37,7 @@ const Contact = ({ contact, onCall, darkMode }) => {
       whileTap={{ scale: 0.98 }}
       className={cn(
         "relative rounded-xl border shadow-sm p-4 transition-all duration-300",
-        "hover:shadow-lg cursor-pointer group",
+        "hover:shadow-lg",
         isDark
           ? "bg-secondary-800 border-secondary-700 hover:border-secondary-600"
           : "bg-white border-secondary-200 hover:border-secondary-300"
@@ -80,6 +79,23 @@ const Contact = ({ contact, onCall, darkMode }) => {
             <Phone className="w-3 h-3" />
             <span>Ext: {contact.extension}</span>
           </ResponsiveText>
+          <div className="flex items-center space-x-1 mt-0.5">
+            <div className={cn(
+              "w-1.5 h-1.5 rounded-full",
+              isOnline ? "bg-green-500" : "bg-secondary-400"
+            )} />
+            <ResponsiveText
+              variant="caption"
+              className={cn(
+                "text-xs",
+                isOnline
+                  ? "text-green-600 dark:text-green-400"
+                  : "text-secondary-500"
+              )}
+            >
+              {isOnline ? 'Online' : 'Offline'}
+            </ResponsiveText>
+          </div>
         </div>
       </div>
 
@@ -96,50 +112,45 @@ const Contact = ({ contact, onCall, darkMode }) => {
         </ResponsiveText>
       )}
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-1">
-          <div className={cn(
-            "w-2 h-2 rounded-full",
-            isOnline ? "bg-green-500" : "bg-secondary-400"
-          )} />
-          <ResponsiveText
-            variant="caption"
-            className={cn(
-              "text-xs font-medium",
-              isOnline
-                ? "text-green-600 dark:text-green-400"
-                : "text-secondary-500"
-            )}
-          >
-            {isOnline ? 'Online' : 'Offline'}
-          </ResponsiveText>
-        </div>
-
-        <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-          <ResponsiveButton
-            onClick={() => onCall(contact.extension)}
-            variant="primary"
-            size="sm"
-            className={cn(
-              "shadow-sm hover:shadow-md transition-all duration-200",
-              "group-hover:scale-105"
-            )}
-            aria-label={`Call ${contact.username || contact.name}`}
-          >
-            <PhoneCall className="w-4 h-4" />
-          </ResponsiveButton>
-        </motion.div>
+      <div className="flex items-center justify-center gap-2 pt-2 border-t border-secondary-200 dark:border-secondary-700">
+        <ActionButton icon={PhoneCall} label="Call" onClick={() => onCall(contact.extension)} isDark={isDark} color="blue" />
+        <ActionButton icon={Video} label="Video" onClick={() => onVideoCall && onVideoCall(contact)} isDark={isDark} color="purple" />
+        <ActionButton icon={Chat} label="Chat" onClick={() => onChat && onChat(contact)} isDark={isDark} color="green" />
+        <ActionButton icon={VoicemailIcon} label="Voicemail" onClick={() => onVoicemail && onVoicemail(contact)} isDark={isDark} color="amber" />
       </div>
     </motion.div>
   );
 };
 
-const ContactsPage = ({ darkMode = false, onCall, userID }) => {
+const ActionButton = ({ icon: Icon, label, onClick, isDark, color }) => {
+  const colorMap = {
+    blue: isDark ? 'hover:bg-blue-900/40 text-blue-400' : 'hover:bg-blue-50 text-blue-600',
+    purple: isDark ? 'hover:bg-purple-900/40 text-purple-400' : 'hover:bg-purple-50 text-purple-600',
+    green: isDark ? 'hover:bg-green-900/40 text-green-400' : 'hover:bg-green-50 text-green-600',
+    amber: isDark ? 'hover:bg-amber-900/40 text-amber-400' : 'hover:bg-amber-50 text-amber-600',
+  };
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className={cn(
+        "flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-lg transition-all text-xs",
+        colorMap[color] || colorMap.blue
+      )}
+      title={label}
+    >
+      <Icon className="w-4 h-4" />
+      <span>{label}</span>
+    </button>
+  );
+};
+
+const ContactsPage = ({ darkMode = false, onCall, onVideoCall, onChat, onVoicemail, userID }) => {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
   const { darkMode: themeDarkMode } = useTheme();
   const isDark = darkMode || themeDarkMode;
 
@@ -147,29 +158,35 @@ const ContactsPage = ({ darkMode = false, onCall, userID }) => {
     fetchContacts();
   }, []);
 
-  const fetchContacts = async () => {
+  const fetchContacts = useCallback(async () => {
     try {
       setLoading(true);
+      setErrorMsg(null);
       const currentUserExtension = getExtension();
-      const users = await getUsers();
+      const result = await getUsers();
 
-      const filtered = users
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch users');
+      }
+
+      const filtered = (result.users || [])
         .filter((user) => `${user.extension}` !== `${currentUserExtension}`)
         .map((user) => ({
           ...user,
           channel: `PJSIP/${user.extension}`,
           avatar: user.avatar || null,
-          status: user.online ? 'online' : 'offline', // Add status based on online field
+          status: user.status === 'online' ? 'online' : 'offline',
+          is_online: user.is_online || user.status === 'online',
         }));
 
       setContacts(filtered);
     } catch (error) {
       console.error('Error fetching users:', error.message);
-      toast.error('Failed to load contacts');
+      setErrorMsg(error.message || 'Failed to load contacts');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -193,17 +210,22 @@ const ContactsPage = ({ darkMode = false, onCall, userID }) => {
     }
   };
 
-  // Filter contacts based on search term
+  // Filter contacts based on search term (case-insensitive, partial match)
   const filteredContacts = contacts.filter(contact =>
+    !searchTerm ||
     contact.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     contact.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    contact.extension?.includes(searchTerm) ||
-    contact.email?.toLowerCase().includes(searchTerm.toLowerCase())
+    contact.extension?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (contact.email || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const handleRetry = () => {
+    fetchContacts();
+  };
 
   return (
     <div className="h-full flex flex-col">
-      {/* Professional Search Bar */}
+      {/* Search Bar */}
       <div className="flex-shrink-0 p-4 lg:p-6 border-b border-secondary-200 dark:border-secondary-700">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-2">
@@ -211,18 +233,18 @@ const ContactsPage = ({ darkMode = false, onCall, userID }) => {
               {filteredContacts.length} contact{filteredContacts.length !== 1 ? 's' : ''} available
             </ResponsiveText>
           </div>
-          <ResponsiveButton
+          <button
             onClick={handleRefresh}
             disabled={loading || refreshing}
-            variant="secondary"
-            size="sm"
             className={cn(
-              (loading || refreshing) && 'animate-spin'
+              "p-2 rounded-lg transition-colors",
+              isDark ? "hover:bg-secondary-700 text-secondary-400" : "hover:bg-secondary-100 text-secondary-600",
+              (loading || refreshing) && 'opacity-50 cursor-not-allowed'
             )}
             title="Refresh contacts"
           >
-            <PhoneCall className="w-4 h-4" />
-          </ResponsiveButton>
+            <RefreshIcon className={cn("w-4 h-4", refreshing && 'animate-spin')} />
+          </button>
         </div>
 
         <div className="relative">
@@ -232,7 +254,7 @@ const ContactsPage = ({ darkMode = false, onCall, userID }) => {
           )} />
           <input
             type="text"
-            placeholder="Search contacts by name, extension, or email..."
+            placeholder="Search by name, extension, or email..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className={cn(
@@ -245,43 +267,37 @@ const ContactsPage = ({ darkMode = false, onCall, userID }) => {
             )}
           />
         </div>
+        {errorMsg && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-red-500 dark:text-red-400">
+            <span>{errorMsg}</span>
+            <button onClick={handleRetry} className="underline hover:no-underline">Retry</button>
+          </div>
+        )}
       </div>
 
-      {/* Contacts List - Scrollable */}
+      {/* Contacts List */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-4 lg:p-6">
           {loading ? (
-            <ResponsiveFlex direction="col" align="center" justify="center" className="h-64 text-center">
+            <div className="flex flex-col items-center justify-center h-64 text-center">
               <div className="w-8 h-8 border-2 border-primary-600 border-t-transparent rounded-full animate-spin mb-4" />
-              <ResponsiveText variant="bodyMedium" className={cn(
-                'mb-2',
-                isDark ? 'text-secondary-400' : 'text-secondary-600'
-              )}>
+              <p className={cn("text-sm mb-2", isDark ? "text-secondary-400" : "text-secondary-600")}>
                 Loading contacts...
-              </ResponsiveText>
-              <ResponsiveText variant="caption" className={isDark ? 'text-secondary-500' : 'text-secondary-500'}>
-                Please wait while we fetch your contacts.
-              </ResponsiveText>
-            </ResponsiveFlex>
+              </p>
+            </div>
           ) : filteredContacts.length === 0 ? (
-            <ResponsiveFlex direction="col" align="center" justify="center" className="h-64 text-center">
-              <Users className={cn(
-                "w-16 h-16 mb-4",
-                isDark ? "text-secondary-600" : "text-secondary-400"
-              )} />
-              <ResponsiveText variant="bodyMedium" className={cn(
-                "mb-2",
-                isDark ? "text-secondary-400" : "text-secondary-600"
-              )}>
-                {searchTerm ? 'No contacts found' : 'No contacts available'}
-              </ResponsiveText>
-              <ResponsiveText variant="caption" className={isDark ? "text-secondary-500" : "text-secondary-500"}>
+            <div className="flex flex-col items-center justify-center h-64 text-center">
+              <Users className={cn("w-16 h-16 mb-4", isDark ? "text-secondary-600" : "text-secondary-400")} />
+              <p className={cn("text-sm mb-2", isDark ? "text-secondary-400" : "text-secondary-600")}>
+                {searchTerm ? 'No contacts match your search' : 'No contacts available'}
+              </p>
+              <p className={cn("text-xs", isDark ? "text-secondary-500" : "text-secondary-500")}>
                 {searchTerm
-                  ? 'Try adjusting your search terms or check the spelling.'
-                  : 'No other users are currently registered in the system.'
+                  ? 'Try a different name, extension, or email.'
+                  : 'No other users are registered in the system.'
                 }
-              </ResponsiveText>
-            </ResponsiveFlex>
+              </p>
+            </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filteredContacts.map((contact, index) => (
@@ -289,11 +305,14 @@ const ContactsPage = ({ darkMode = false, onCall, userID }) => {
                   key={contact.id}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.05 }}
+                  transition={{ delay: index * 0.03 }}
                 >
                   <Contact
                     contact={contact}
                     onCall={handleCall}
+                    onVideoCall={onVideoCall}
+                    onChat={onChat}
+                    onVoicemail={onVoicemail}
                     darkMode={isDark}
                   />
                 </motion.div>

@@ -147,6 +147,9 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
 
   const [unreadCount, setUnreadCount] = useState(0);
   const [voicemailUnread, setVoicemailUnread] = useState(0);
+  const [videoCallContact, setVideoCallContact] = useState(null);
+  const [videoCallType, setVideoCallType] = useState("outgoing");
+  const [voicemailContact, setVoicemailContact] = useState(null);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -312,6 +315,11 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
               icon: "/favicon.ico"
             });
           }
+        } else if (data.type === "video_call_request") {
+          setVideoCallContact({ extension: data.from, username: data.fromUsername, name: data.fromUsername || `Ext ${data.from}`, id: data.caller_id });
+          setVideoCallType("incoming");
+          setCurrentPage("video");
+          toast.info(`Incoming video call from ${data.fromUsername || data.from}`, { duration: 8000 });
         } else if (data.type === "incoming_call" && data.type !== "webrtc_call_invitation") {
           setLocalIncomingCall(data);
         } else if (data.type === "user_status_changed") {
@@ -466,6 +474,21 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   };
 
 
+
+  const startVideoCall = (contact) => {
+    setVideoCallContact(contact);
+    setVideoCallType("outgoing");
+    setCurrentPage("video");
+  };
+
+  const startChat = (contact) => {
+    setCurrentPage("chat");
+  };
+
+  const startVoicemail = (contact) => {
+    setVoicemailContact(contact);
+    setCurrentPage("voicemail");
+  };
 
   const handleLogout = () => {
     localStorage.removeItem("token");
@@ -859,6 +882,9 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                     )}>
                       <ContactsPage
                         onCall={(extension) => startCall({ extension, name: `Extension ${extension}` })}
+                        onVideoCall={(contact) => startVideoCall(contact)}
+                        onChat={(contact) => startChat(contact)}
+                        onVoicemail={(contact) => startVoicemail(contact)}
                         darkMode={isDarkMode}
                         userID={user?.username}
                       />
@@ -928,7 +954,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       "flex-1 overflow-hidden rounded-xl",
                       darkMode ? "bg-secondary-800" : "bg-white"
                     )}>
-                      <VoicemailPage darkMode={isDarkMode} />
+                      <VoicemailPage darkMode={isDarkMode} preselectedContact={voicemailContact} />
                     </div>
                   </div>
                 )}
@@ -938,7 +964,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       "flex-1 overflow-hidden rounded-xl",
                       darkMode ? "bg-secondary-800" : "bg-white"
                     )}>
-                      <VideoCallPage darkMode={isDarkMode} user={user} onEndCall={() => setCurrentPage('keypad')} />
+                      <VideoCallPage darkMode={isDarkMode} user={user} contact={videoCallContact} callType={videoCallType} onEndCall={() => { setCurrentPage('keypad'); setVideoCallContact(null); setVideoCallType("outgoing"); }} />
                     </div>
                   </div>
                 )}

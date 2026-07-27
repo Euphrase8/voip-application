@@ -321,6 +321,12 @@ func (c *Client) handleMessage(msg Message) {
 			c.hub.SendToExtension(msg.To, msg)
 		}
 
+	case "video_call_request":
+		// Forward video call request to target extension
+		if msg.To != "" {
+			c.hub.SendToExtension(msg.To, msg)
+		}
+
 	// Chat message types
 	case "chat_message":
 		if msg.To != "" {

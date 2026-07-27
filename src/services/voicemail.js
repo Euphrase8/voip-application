@@ -13,6 +13,11 @@ export const getVoicemails = async () => {
   return res.data;
 };
 
+export const getSentVoicemails = async () => {
+  const res = await axios.get(`${API_URL}/protected/voicemail/sent`, authHeaders());
+  return res.data;
+};
+
 export const getVoicemail = async (id) => {
   const res = await axios.get(`${API_URL}/protected/voicemail/${id}`, authHeaders());
   return res.data;

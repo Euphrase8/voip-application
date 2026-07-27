@@ -116,7 +116,18 @@ func CreateVoicemail(c *gin.Context) {
 			if callee.Extension != "" {
 				hub.SendToExtension(callee.Extension, wsMsg)
 			}
-			hub.BroadcastMessage(wsMsg)
+			// Also notify the sender about sent voicemail
+			var caller models.User
+			if vm.CallerID > 0 {
+				if err := db.First(&caller, vm.CallerID).Error; err == nil && caller.Extension != "" {
+					wsMsgSent := websocket.Message{
+						Type:      "voicemail_sent",
+						Data:      vm,
+						Timestamp: time.Now().Unix(),
+					}
+					hub.SendToExtension(caller.Extension, wsMsgSent)
+				}
+			}
 		}
 	}
 
@@ -170,6 +181,16 @@ func SearchVoicemails(c *gin.Context) {
 
 	var voicemails []models.Voicemail
 	tx.Preload("Caller").Find(&voicemails)
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "voicemails": voicemails})
+}
+
+func GetSentVoicemails(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+
+	db := database.GetDB()
+	var voicemails []models.Voicemail
+	db.Where("caller_id = ?", userID).Order("created_at desc").Preload("Callee").Find(&voicemails)
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "voicemails": voicemails})
 }
@@ -250,7 +271,7 @@ func DeleteVoicemail(c *gin.Context) {
 
 	db := database.GetDB()
 	var vm models.Voicemail
-	if err := db.Where("id = ? AND callee_id = ?", id, userID).First(&vm).Error; err != nil {
+	if err := db.Where("id = ? AND (callee_id = ? OR caller_id = ?)", id, userID, userID).First(&vm).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Voicemail not found"})
 		return
 	}

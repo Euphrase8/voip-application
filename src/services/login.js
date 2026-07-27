@@ -71,6 +71,7 @@ export const login = async (username, password) => {
       localStorage.setItem('extension', extension);
       localStorage.setItem('userRole', user.role || 'user');
       localStorage.setItem('user_id', user.id?.toString() || '');
+      localStorage.setItem('username', user.username || '');
       console.log('[login.js] Login successful, stored:', { token, extension, role: user.role, userId: user.id });
 
       // ✅ Connect to WebSocket after successful login

@@ -57,7 +57,10 @@ const ChatPage = ({ darkMode, currentUser }) => {
         if (data.type === "chat_message") {
           const msg = data.data;
           if (selectedUser && (String(msg.sender_id) === String(selectedUser.id))) {
-            setMessages(prev => [...prev, msg]);
+            setMessages(prev => {
+              if (prev.find(m => String(m.id) === String(msg.id))) return prev;
+              return [...prev, msg];
+            });
             markAsRead(msg.sender_id);
           } else if (String(msg.sender_id) !== currentUserId) {
             toast.custom((t) => (
@@ -86,6 +89,7 @@ const ChatPage = ({ darkMode, currentUser }) => {
               return [...prev, msg];
             });
           }
+          loadConversations();
         } else if (data.type === "chat_typing") {
           if (data.data?.is_typing) {
             setTypingUser(data.from);
@@ -151,11 +155,7 @@ const ChatPage = ({ darkMode, currentUser }) => {
     const content = newMessage.trim();
     setNewMessage("");
     try {
-      const data = await sendMessage(selectedUser.id, content);
-      if (data.success) {
-        setMessages(prev => [...prev, data.message]);
-        loadConversations();
-      }
+      await sendMessage(selectedUser.id, content);
     } catch (e) { console.error("Failed to send message", e); }
   };
 
@@ -176,12 +176,8 @@ const ChatPage = ({ darkMode, currentUser }) => {
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         if (recordingDuration >= 1 && selectedUser) {
           try {
-            const data = await sendVoiceMessage(selectedUser.id, blob, recordingDuration);
-            if (data.success) {
-              setMessages(prev => [...prev, data.message]);
-              loadConversations();
-              toast.success("Voice message sent");
-            }
+            await sendVoiceMessage(selectedUser.id, blob, recordingDuration);
+            toast.success("Voice message sent");
           } catch (e) {
             toast.error("Failed to send voice message");
           }
