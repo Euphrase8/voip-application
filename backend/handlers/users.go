@@ -347,10 +347,19 @@ func DeleteUser(c *gin.Context) {
 
 // UpdateUserStatus updates a user's online status
 func UpdateUserStatus(c *gin.Context) {
-	userID, exists := c.Get("user_id")
+	userIDRaw, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "User not authenticated",
+		})
+		return
+	}
+
+	userID, ok := userIDRaw.(uint)
+	if !ok {
+		log.Printf("[UpdateUserStatus] Invalid user_id type in context: %T", userIDRaw)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Invalid user ID in authentication context",
 		})
 		return
 	}
@@ -360,6 +369,7 @@ func UpdateUserStatus(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[UpdateUserStatus] Invalid request body: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid request format",
 		})
@@ -375,13 +385,13 @@ func UpdateUserStatus(c *gin.Context) {
 	}
 
 	if !validStatuses[req.Status] {
+		log.Printf("[UpdateUserStatus] Invalid status value: %s (from user %d)", req.Status, userID)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid status. Must be one of: online, offline, busy, away",
 		})
 		return
 	}
 
-	// Update user status
 	now := time.Now()
 	updates := map[string]interface{}{
 		"status":    req.Status,
@@ -394,9 +404,18 @@ func UpdateUserStatus(c *gin.Context) {
 		updates["is_online"] = false
 	}
 
-	if err := database.GetDB().Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+	result := database.GetDB().Model(&models.User{}).Where("id = ?", userID).Updates(updates)
+	if result.Error != nil {
+		log.Printf("[UpdateUserStatus] Database error updating status for user %d: %v", userID, result.Error)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to update status",
+			"error": "Failed to update status: " + result.Error.Error(),
+		})
+		return
+	}
+	if result.RowsAffected == 0 {
+		log.Printf("[UpdateUserStatus] User %d not found in database", userID)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "User not found",
 		})
 		return
 	}
@@ -404,6 +423,7 @@ func UpdateUserStatus(c *gin.Context) {
 	// Get updated user info
 	var user models.User
 	if err := database.GetDB().First(&user, userID).Error; err != nil {
+		log.Printf("[UpdateUserStatus] Failed to fetch updated user %d: %v", userID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch updated user",
 		})
@@ -446,7 +466,7 @@ func UpdateUserStatus(c *gin.Context) {
 
 // HeartbeatUser updates user's last_seen timestamp to indicate they're still active
 func HeartbeatUser(c *gin.Context) {
-	userID, exists := c.Get("user_id")
+	userIDRaw, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "User not authenticated",
@@ -454,9 +474,9 @@ func HeartbeatUser(c *gin.Context) {
 		return
 	}
 
-	// Get user extension for WebSocket status check
-	userIDUint, ok := userID.(uint)
+	userID, ok := userIDRaw.(uint)
 	if !ok {
+		log.Printf("[HeartbeatUser] Invalid user_id type in context: %T", userIDRaw)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Invalid user ID",
 		})
@@ -465,7 +485,8 @@ func HeartbeatUser(c *gin.Context) {
 
 	// Get user info
 	var user models.User
-	if err := database.GetDB().First(&user, userIDUint).Error; err != nil {
+	if err := database.GetDB().First(&user, userID).Error; err != nil {
+		log.Printf("[HeartbeatUser] User %d not found: %v", userID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch user",
 		})
@@ -488,11 +509,16 @@ func HeartbeatUser(c *gin.Context) {
 		}
 	}
 
-	if err := database.GetDB().Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+	result := database.GetDB().Model(&models.User{}).Where("id = ?", userID).Updates(updates)
+	if result.Error != nil {
+		log.Printf("[HeartbeatUser] Database error updating heartbeat for user %d: %v", userID, result.Error)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to update heartbeat",
+			"error": "Failed to update heartbeat: " + result.Error.Error(),
 		})
 		return
+	}
+	if result.RowsAffected == 0 {
+		log.Printf("[HeartbeatUser] User %d not found during heartbeat update", userID)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
