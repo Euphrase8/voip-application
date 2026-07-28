@@ -27,7 +27,7 @@ func InitDatabase() {
 	}
 
 	// Connect to SQLite database using pure Go driver (modernc.org/sqlite)
-	dsn := config.AppConfig.DBPath + "?_pragma=foreign_keys(1)"
+	dsn := config.AppConfig.DBPath + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	DB, err = gorm.Open(sqlite.Dialector{
 		DriverName: "sqlite",
 		DSN:        dsn,
@@ -37,6 +37,10 @@ func InitDatabase() {
 	}
 
 	log.Println("Database connected successfully")
+
+	// Enable WAL mode for better concurrent access and set busy timeout
+	DB.Exec("PRAGMA journal_mode=WAL")
+	DB.Exec("PRAGMA busy_timeout=5000")
 
 	// Auto-migrate the schema
 	err = DB.AutoMigrate(
