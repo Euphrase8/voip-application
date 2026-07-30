@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -46,7 +47,10 @@ type Config struct {
 	DiscoveryMode string
 }
 
-var AppConfig *Config
+var (
+	AppConfig *Config
+	ConfigMu  sync.RWMutex
+)
 
 func LoadConfig() {
 	// Load .env file if it exists

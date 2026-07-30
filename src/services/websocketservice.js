@@ -1,9 +1,11 @@
 import { CONFIG } from './config';
+import { getToken } from './login';
 
 let socket = null;
 let reconnectTimeout = null;
 let reconnectAttempts = 0;
 let currentExtension = null;
+let currentToken = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL = 5000;
 
@@ -68,6 +70,7 @@ let url = CONFIG.WS_URL;
 export const connectWebSocket = (extension = null, wsUrl = CONFIG.WS_URL) => {
   url = wsUrl;
   const targetExtension = extension || localStorage.getItem('extension');
+  const token = getToken();
 
   if (socket && socket.readyState === WebSocket.OPEN && currentExtension === targetExtension) {
     return socket;
@@ -79,7 +82,10 @@ export const connectWebSocket = (extension = null, wsUrl = CONFIG.WS_URL) => {
   }
 
   currentExtension = targetExtension;
-  const fullUrl = targetExtension ? `${url}?extension=${encodeURIComponent(targetExtension)}` : url;
+  currentToken = token;
+
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+  const fullUrl = targetExtension ? `${url}?extension=${encodeURIComponent(targetExtension)}${tokenParam}` : url;
 
   socket = new WebSocket(fullUrl);
   setupSocketHandlers();

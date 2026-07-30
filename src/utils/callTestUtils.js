@@ -255,8 +255,8 @@ export const runAllCallTests = async () => {
   return await tester.runAllTests();
 };
 
-// Export for global access in browser console
-if (typeof window !== 'undefined') {
+// Export for global access in browser console (development only)
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
   window.callTester = {
     quickHangupTest,
     quickWebRTCTest,

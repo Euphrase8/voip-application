@@ -42,7 +42,7 @@ export const getUsers = async () => {
 };
 
 export const setupWebSocket = (extension, onIncomingCall, onError) => {
-  const ws = new WebSocket(`${WS_URL}?userID=${extension}`);
+  const ws = new WebSocket(`${WS_URL}?extension=${extension}`);
 
   ws.onopen = () => {
     console.log(`WebSocket connected for user: ${extension}`);

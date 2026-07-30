@@ -2,6 +2,7 @@ package database
 
 import (
 	"log"
+	"time"
 	"voip-backend/config"
 	"voip-backend/models"
 
@@ -41,6 +42,13 @@ func InitDatabase() {
 	// Enable WAL mode for better concurrent access and set busy timeout
 	DB.Exec("PRAGMA journal_mode=WAL")
 	DB.Exec("PRAGMA busy_timeout=5000")
+
+	sqlDB, err := DB.DB()
+	if err == nil {
+		sqlDB.SetMaxOpenConns(25)
+		sqlDB.SetMaxIdleConns(10)
+		sqlDB.SetConnMaxLifetime(5 * time.Minute)
+	}
 
 	// Auto-migrate the schema
 	err = DB.AutoMigrate(
@@ -97,43 +105,45 @@ func createDefaultUsers() {
 		}
 	}
 
-	// Create some test users
-	testUsers := []models.User{
-		{
-			Username:  "user1",
-			Email:     "user1@voip.local",
-			Password:  "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi", // password: password
-			Extension: "1001",
-			Status:    "offline",
-			Role:      "user",
-		},
-		{
-			Username:  "user2",
-			Email:     "user2@voip.local",
-			Password:  "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi", // password: password
-			Extension: "1002",
-			Status:    "offline",
-			Role:      "user",
-		},
-		{
-			Username:  "user3",
-			Email:     "user3@voip.local",
-			Password:  "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi", // password: password
-			Extension: "1003",
-			Status:    "offline",
-			Role:      "user",
-		},
-	}
+	// Create test users only in debug mode
+	if config.AppConfig.Debug {
+		testUsers := []models.User{
+			{
+				Username:  "user1",
+				Email:     "user1@voip.local",
+				Password:  "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi",
+				Extension: "1001",
+				Status:    "offline",
+				Role:      "user",
+			},
+			{
+				Username:  "user2",
+				Email:     "user2@voip.local",
+				Password:  "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi",
+				Extension: "1002",
+				Status:    "offline",
+				Role:      "user",
+			},
+			{
+				Username:  "user3",
+				Email:     "user3@voip.local",
+				Password:  "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi",
+				Extension: "1003",
+				Status:    "offline",
+				Role:      "user",
+			},
+		}
 
-	for _, user := range testUsers {
-		var existingUser models.User
-		result := DB.Where("username = ?", user.Username).First(&existingUser)
+		for _, user := range testUsers {
+			var existingUser models.User
+			result := DB.Where("username = ?", user.Username).First(&existingUser)
 
-		if result.Error == gorm.ErrRecordNotFound {
-			if err := DB.Create(&user).Error; err != nil {
-				log.Printf("Failed to create test user %s: %v", user.Username, err)
-			} else {
-				log.Printf("Test user created: %s (extension: %s)", user.Username, user.Extension)
+			if result.Error == gorm.ErrRecordNotFound {
+				if err := DB.Create(&user).Error; err != nil {
+					log.Printf("Failed to create test user %s: %v", user.Username, err)
+				} else {
+					log.Printf("Test user created: %s (extension: %s)", user.Username, user.Extension)
+				}
 			}
 		}
 	}

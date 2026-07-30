@@ -318,13 +318,9 @@ const VoicemailPage = ({ darkMode, preselectedContact }) => {
     const formData = new FormData();
     formData.append('audio', recordedBlob, `voicemail_${Date.now()}.webm`);
     formData.append('callee_id', selectedRecipient.id);
-    formData.append('caller_number', localStorage.getItem('extension') || '');
-    formData.append('sender_extension', localStorage.getItem('extension') || '');
-    formData.append('sender_name', localStorage.getItem('username') || '');
     formData.append('duration', String(recordingDuration));
     formData.append('recipient_name', selectedRecipient.username);
     formData.append('recipient_extension', selectedRecipient.extension);
-    formData.append('caller_id', currentUserId);
     try {
       const res = await createVoicemail(formData);
       if (res.success) {
@@ -333,6 +329,7 @@ const VoicemailPage = ({ darkMode, preselectedContact }) => {
         setSelectedRecipient(null);
         setRecordedBlob(null);
         setRecordingPreviewUrl(null);
+        setActiveTab(TABS.SENT);
         loadVoicemails();
         loadUnreadCount();
       } else {

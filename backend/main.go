@@ -26,7 +26,6 @@ func main() {
 
 	// Initialize database
 	database.InitDatabase()
-	defer database.CloseDB()
 
 	// Initialize WebSocket hub
 	websocket.InitHub()
@@ -98,12 +97,10 @@ func main() {
 
 	// Health check endpoint
 	r.GET("/health", func(c *gin.Context) {
-		start := time.Now()
 		c.JSON(200, gin.H{
-			"status":           "ok",
-			"service":          "voip-backend",
-			"timestamp":        start.Unix(),
-			"response_time_ms": time.Since(start).Milliseconds(),
+			"status":    "ok",
+			"service":   "voip-backend",
+			"timestamp": time.Now().Unix(),
 		})
 	})
 
@@ -131,7 +128,7 @@ func main() {
 			return
 		}
 
-		// Update configuration if provided
+		config.ConfigMu.Lock()
 		if updateRequest.AsteriskHost != "" {
 			config.AppConfig.AsteriskHost = updateRequest.AsteriskHost
 			config.AppConfig.SIPDomain = updateRequest.AsteriskHost
@@ -142,12 +139,7 @@ func main() {
 		if updateRequest.SIPPort != "" {
 			config.AppConfig.SIPPort = updateRequest.SIPPort
 		}
-
-		log.Printf("[Config] Configuration updated: Asterisk=%s:%s, SIP=%s:%s",
-			config.AppConfig.AsteriskHost,
-			config.AppConfig.AsteriskAMIPort,
-			config.AppConfig.AsteriskHost,
-			config.AppConfig.SIPPort)
+		config.ConfigMu.Unlock()
 
 		c.JSON(200, gin.H{
 			"success": true,
@@ -193,6 +185,11 @@ func main() {
 			callRoutes.POST("/hangup", handlers.HangupCall)
 			callRoutes.GET("/active", handlers.GetActiveCalls)
 			callRoutes.GET("/logs", handlers.GetCallLogs)
+			callRoutes.POST("/transfer", handlers.TransferCall)
+			callRoutes.POST("/hold", handlers.HoldCall)
+			callRoutes.POST("/unhold", handlers.UnholdCall)
+			callRoutes.POST("/record/start", handlers.StartCallRecording)
+			callRoutes.POST("/record/stop", handlers.StopCallRecording)
 		}
 
 		// Chat Message routes
@@ -218,6 +215,7 @@ func main() {
 		{
 			voicemailRoutes.POST("/create", handlers.CreateVoicemail)
 			voicemailRoutes.GET("/list", handlers.GetVoicemails)
+			voicemailRoutes.GET("/sent", handlers.GetSentVoicemails)
 			voicemailRoutes.GET("/search", handlers.SearchVoicemails)
 			voicemailRoutes.GET("/unread-count", handlers.GetVoicemailUnreadCount)
 			voicemailRoutes.GET("/:id", handlers.GetVoicemail)
@@ -236,16 +234,6 @@ func main() {
 		// Voicemail greeting
 		protected.POST("/voicemail-greeting", handlers.UploadVoicemailGreeting)
 		protected.GET("/voicemail-greeting/play", handlers.GetVoicemailGreeting)
-
-		// Call management routes (transfer, hold, etc.)
-		callManagementRoutes := protected.Group("/call")
-		{
-			callManagementRoutes.POST("/transfer", handlers.TransferCall)
-			callManagementRoutes.POST("/hold", handlers.HoldCall)
-			callManagementRoutes.POST("/unhold", handlers.UnholdCall)
-			callManagementRoutes.POST("/record/start", handlers.StartCallRecording)
-			callManagementRoutes.POST("/record/stop", handlers.StopCallRecording)
-		}
 
 		// Voicemail greetings and settings
 		protected.POST("/voicemail/settings", handlers.UpdateVoicemailSettings)

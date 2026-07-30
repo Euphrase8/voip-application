@@ -10,6 +10,7 @@ import (
 	"time"
 	"voip-backend/database"
 	"voip-backend/models"
+	"voip-backend/security"
 	"voip-backend/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -27,15 +28,26 @@ func CreateVoicemail(c *gin.Context) {
 
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 25<<20)
 
+	// Get the authenticated user from JWT context
+	callerID, _ := c.Get("user_id")
+	callerUsername, _ := c.Get("username")
+	callerExtension, _ := c.Get("extension")
+
 	calleeID, err := strconv.ParseUint(c.PostForm("callee_id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid callee ID"})
 		return
 	}
 
-	callerNumber := c.PostForm("caller_number")
+	// Use form values if provided, otherwise fall back to JWT context
 	senderName := c.PostForm("sender_name")
+	if senderName == "" {
+		senderName = callerUsername.(string)
+	}
 	senderExtension := c.PostForm("sender_extension")
+	if senderExtension == "" {
+		senderExtension = callerExtension.(string)
+	}
 	recipientName := c.PostForm("recipient_name")
 	recipientExtension := c.PostForm("recipient_extension")
 	callType := c.PostForm("call_type")
@@ -50,7 +62,17 @@ func CreateVoicemail(c *gin.Context) {
 
 	file, err := c.FormFile("audio")
 	if err == nil {
-		filename := fmt.Sprintf("voicemail_%d_%d.wav", calleeID, time.Now().Unix())
+		ext := ".webm"
+		if ct := file.Header.Get("Content-Type"); ct != "" {
+			if ct == "audio/webm" {
+				ext = ".webm"
+			} else if ct == "audio/mp4" || ct == "audio/m4a" {
+				ext = ".mp4"
+			} else if ct == "audio/wav" || ct == "audio/wave" {
+				ext = ".wav"
+			}
+		}
+		filename := fmt.Sprintf("voicemail_%d_%d%s", calleeID, time.Now().Unix(), ext)
 		filePath = filepath.Join(voicemailDir, filename)
 		fileSize = file.Size
 
@@ -73,8 +95,9 @@ func CreateVoicemail(c *gin.Context) {
 
 	db := database.GetDB()
 	vm := models.Voicemail{
+		CallerID:           callerID.(uint),
 		CalleeID:           uint(calleeID),
-		CallerNumber:       callerNumber,
+		CallerNumber:       senderExtension,
 		SenderName:         senderName,
 		SenderExtension:    senderExtension,
 		RecipientName:      recipientName,
@@ -90,12 +113,6 @@ func CreateVoicemail(c *gin.Context) {
 		vm.CallType = callType
 	}
 
-	if callerIDStr := c.PostForm("caller_id"); callerIDStr != "" {
-		if cid, parseErr := strconv.ParseUint(callerIDStr, 10, 64); parseErr == nil {
-			vm.CallerID = uint(cid)
-		}
-	}
-
 	if err := db.Create(&vm).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to save voicemail"})
 		return
@@ -105,29 +122,27 @@ func CreateVoicemail(c *gin.Context) {
 
 	hub := websocket.GetHub()
 	if hub != nil {
+		// Notify the recipient (callee) about new voicemail
 		var callee models.User
-		if err := db.First(&callee, calleeID).Error; err == nil {
+		if err := db.First(&callee, calleeID).Error; err == nil && callee.Extension != "" {
 			wsMsg := websocket.Message{
 				Type:      "voicemail_new",
 				To:        callee.Extension,
 				Data:      vm,
 				Timestamp: time.Now().Unix(),
 			}
-			if callee.Extension != "" {
-				hub.SendToExtension(callee.Extension, wsMsg)
+			hub.SendToExtension(callee.Extension, wsMsg)
+		}
+
+		// Always notify the sender (caller) about successful send
+		var caller models.User
+		if err := db.First(&caller, callerID).Error; err == nil && caller.Extension != "" {
+			wsMsgSent := websocket.Message{
+				Type:      "voicemail_sent",
+				Data:      vm,
+				Timestamp: time.Now().Unix(),
 			}
-			// Also notify the sender about sent voicemail
-			var caller models.User
-			if vm.CallerID > 0 {
-				if err := db.First(&caller, vm.CallerID).Error; err == nil && caller.Extension != "" {
-					wsMsgSent := websocket.Message{
-						Type:      "voicemail_sent",
-						Data:      vm,
-						Timestamp: time.Now().Unix(),
-					}
-					hub.SendToExtension(caller.Extension, wsMsgSent)
-				}
-			}
+			hub.SendToExtension(caller.Extension, wsMsgSent)
 		}
 	}
 
@@ -299,7 +314,12 @@ func GetVoicemailAudio(c *gin.Context) {
 		return
 	}
 
-	c.File(vm.FilePath)
+	safePath, err := security.SafeFilePath(voicemailDir, vm.FilePath)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Access denied"})
+		return
+	}
+	c.File(safePath)
 }
 
 func DownloadVoicemail(c *gin.Context) {
@@ -317,10 +337,15 @@ func DownloadVoicemail(c *gin.Context) {
 		return
 	}
 
+	safePath, err := security.SafeFilePath(voicemailDir, vm.FilePath)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Access denied"})
+		return
+	}
 	filename := fmt.Sprintf("voicemail_%s_%s.wav", vm.SenderExtension, vm.CreatedAt.Format("20060102_150405"))
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 	c.Header("Content-Type", "audio/wav")
-	c.File(vm.FilePath)
+	c.File(safePath)
 }
 
 func GetVoicemailUnreadCount(c *gin.Context) {

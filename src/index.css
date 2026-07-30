@@ -12,16 +12,14 @@
   }
 
   html, body {
-    @apply bg-white text-gray-900 font-sans;
+    @apply bg-white text-gray-900;
     margin: 0;
     padding: 0;
     height: 100%;
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* Prevent zoom on iOS */
     -webkit-text-size-adjust: 100%;
-    /* Prevent pull-to-refresh */
     overscroll-behavior: none;
   }
 

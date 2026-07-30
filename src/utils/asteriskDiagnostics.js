@@ -346,8 +346,8 @@ class AsteriskDiagnostics {
 // Create singleton instance
 const asteriskDiagnostics = new AsteriskDiagnostics();
 
-// Make available globally for debugging
-if (typeof window !== 'undefined') {
+// Make available globally for debugging (development only)
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
   window.asteriskDiagnostics = asteriskDiagnostics;
 }
 

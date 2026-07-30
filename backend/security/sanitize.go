@@ -2,6 +2,7 @@ package security
 
 import (
 	"html"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -51,4 +52,33 @@ func IsValidExtension(ext string) bool {
 func IsValidUsername(username string) bool {
 	match, _ := regexp.MatchString(`^[a-zA-Z0-9_-]{3,50}$`, username)
 	return match
+}
+
+// SafeFilePath ensures a file path stays within the expected directory (prevents path traversal)
+func SafeFilePath(baseDir, filePath string) (string, error) {
+	cleanPath := filepath.Clean(filePath)
+	if cleanPath == "." || cleanPath == "" {
+		return "", filepath.ErrBadPattern
+	}
+
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", err
+	}
+
+	absPath, err := filepath.Abs(cleanPath)
+	if err != nil {
+		return "", err
+	}
+
+	relPath, err := filepath.Rel(absBase, absPath)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.HasPrefix(relPath, "..") {
+		return "", filepath.ErrBadPattern
+	}
+
+	return absPath, nil
 }

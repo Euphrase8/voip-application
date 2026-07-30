@@ -1,153 +1,117 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  FiSend, FiMessageSquare, FiChevronLeft, FiUsers, FiSearch,
-  FiMic, FiSquare, FiPlay, FiPause, FiVolume2, FiCheck, FiClock
-} from "react-icons/fi";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  sendMessage, getMessages, getConversations, getUnreadCount, markAsRead,
-  sendVoiceMessage, getVoiceMessageAudioUrl
-} from "../services/messages";
+import { FiSend, FiChevronLeft, FiSearch, FiCheck, FiClock } from "react-icons/fi";
+import { getMessages, getConversations, getUnreadCount, markAsRead } from "../services/messages";
 import { getUsers } from "../services/users";
-import { getWebSocket, sendWebSocketMessage } from "../services/websocketservice";
-import { cn } from "../utils/ui";
-import toast from "react-hot-toast";
+import { addMessageListener } from "../services/websocketservice";
 
 const ChatPage = ({ darkMode, currentUser }) => {
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [newMessage, setNewMessage] = useState("");
-  const [users, setUsers] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [showNewChat, setShowNewChat] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingDuration, setRecordingDuration] = useState(0);
-  const [playingVoice, setPlayingVoice] = useState(null);
-  const [voiceProgress, setVoiceProgress] = useState({});
-  const [typingUser, setTypingUser] = useState(null);
+  const [onlineUsers, setOnlineUsers] = useState(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
-  const typingTimeoutRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const recordingTimerRef = useRef(null);
-  const audioRef = useRef(null);
-  const voiceIntervalRef = useRef(null);
 
   const currentUserId = localStorage.getItem("user_id");
 
   const scrollToBottom = useCallback(() => {
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+    requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }));
   }, []);
 
-  useEffect(() => { loadConversations(); loadUnreadCount(); loadUsers(); }, []);
+  useEffect(() => {
+    loadConversations();
+    loadUnreadCount();
+    fetchOnlineUsers();
+  }, []);
 
   useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
   useEffect(() => {
-    const socket = getWebSocket();
-    if (!socket) return;
-
-    const handleMessage = (event) => {
+    const listener = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === "chat_message") {
           const msg = data.data;
-          if (selectedUser && (String(msg.sender_id) === String(selectedUser.id))) {
+          if (selectedUser && String(msg.sender_id) === String(selectedUser.id)) {
             setMessages(prev => {
               if (prev.find(m => String(m.id) === String(msg.id))) return prev;
               return [...prev, msg];
             });
             markAsRead(msg.sender_id);
-          } else if (String(msg.sender_id) !== currentUserId) {
-            toast.custom((t) => (
-              <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white dark:bg-gray-800 shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
-                <div className="flex-1 w-0 p-3">
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">
-                    {msg.sender?.username || "New Message"}
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-300 truncate">{msg.content || "[Voice Message]"}</p>
-                </div>
-                <div className="flex border-l border-gray-200 dark:border-gray-700">
-                  <button onClick={() => { toast.dismiss(t.id); }} className="w-full border border-transparent rounded-none rounded-r-lg p-3 flex items-center justify-center text-sm font-medium text-blue-600 hover:text-blue-500 focus:outline-none">
-                    View
-                  </button>
-                </div>
-              </div>
-            ), { duration: 4000 });
           }
           loadConversations();
           loadUnreadCount();
         } else if (data.type === "chat_message_sent") {
           const msg = data.data;
-          if (selectedUser && (String(msg.receiver_id) === String(selectedUser.id))) {
+          if (selectedUser && String(msg.receiver_id) === String(selectedUser.id)) {
             setMessages(prev => {
-              if (prev.find(m => m.id === msg.id)) return prev;
+              if (prev.find(m => String(m.id) === String(msg.id))) return prev;
               return [...prev, msg];
             });
           }
           loadConversations();
-        } else if (data.type === "chat_typing") {
-          if (data.data?.is_typing) {
-            setTypingUser(data.from);
-            clearTimeout(typingTimeoutRef.current);
-            typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 3000);
-          } else {
-            setTypingUser(null);
-          }
         } else if (data.type === "user_status_changed") {
-          setUsers(prev => prev.map(u =>
-            u.extension === data.extension ? { ...u, status: data.status, is_online: data.is_online } : u
-          ));
-          setConversations(prev => prev.map(c =>
-            c.user.extension === data.extension
-              ? { ...c, user: { ...c.user, status: data.status, is_online: data.is_online } }
-              : c
-          ));
+          if (data.status === "online") {
+            setOnlineUsers(prev => new Set(prev).add(data.from));
+          } else {
+            setOnlineUsers(prev => {
+              const next = new Set(prev);
+              next.delete(data.from);
+              return next;
+            });
+          }
         }
       } catch (e) {}
     };
-
-    socket.addEventListener("message", handleMessage);
-    return () => socket.removeEventListener("message", handleMessage);
+    const unsubscribe = addMessageListener(listener);
+    return () => unsubscribe();
   }, [selectedUser, currentUserId]);
+
+  const fetchOnlineUsers = async () => {
+    try {
+      const data = await getUsers();
+      if (data.success) {
+        const online = new Set(data.users.filter(u => u.status === "online").map(u => u.extension));
+        setOnlineUsers(online);
+      }
+    } catch (e) {}
+  };
 
   const loadConversations = async () => {
     try {
       const data = await getConversations();
-      if (data.success) setConversations(data.conversations);
-    } catch (e) { console.error("Failed to load conversations", e); }
+      if (data.success) {
+        const sorted = (data.conversations || []).sort((a, b) => {
+          const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+          const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+          return bTime - aTime;
+        });
+        setConversations(sorted);
+      }
+    } catch (e) {}
   };
 
   const loadUnreadCount = async () => {
     try {
-      const data = await getUnreadCount();
-      if (data.success) setUnreadCount(data.unread_count);
-    } catch (e) {}
-  };
-
-  const loadUsers = async () => {
-    try {
-      const data = await getUsers();
-      if (data.success) setUsers(data.users.filter(u => String(u.id) !== currentUserId));
+      await getUnreadCount();
     } catch (e) {}
   };
 
   const loadMessages = async (user) => {
     setSelectedUser(user);
-    setShowNewChat(false);
     setShowSidebar(false);
     try {
       const data = await getMessages(user.id);
       if (data.success) {
-        setMessages(data.messages);
+        setMessages(data.messages || []);
         markAsRead(user.id);
+        loadConversations();
         loadUnreadCount();
       }
-    } catch (e) { console.error("Failed to load messages", e); }
+    } catch (e) {}
   };
 
   const handleSend = async () => {
@@ -155,96 +119,16 @@ const ChatPage = ({ darkMode, currentUser }) => {
     const content = newMessage.trim();
     setNewMessage("");
     try {
-      await sendMessage(selectedUser.id, content);
-    } catch (e) { console.error("Failed to send message", e); }
-  };
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        if (recordingDuration >= 1 && selectedUser) {
-          try {
-            await sendVoiceMessage(selectedUser.id, blob, recordingDuration);
-            toast.success("Voice message sent");
-          } catch (e) {
-            toast.error("Failed to send voice message");
-          }
-        }
-        setRecordingDuration(0);
-        setIsRecording(false);
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordingDuration(0);
-
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingDuration(prev => prev + 1);
-      }, 1000);
-    } catch (e) {
-      toast.error("Microphone access denied. Please allow microphone permissions.");
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-    }
-    clearInterval(recordingTimerRef.current);
-  };
-
-  const handlePlayVoice = (msg) => {
-    if (playingVoice === msg.id) {
-      if (audioRef.current && !audioRef.current.paused) {
-        audioRef.current.pause();
-        clearInterval(voiceIntervalRef.current);
-      } else if (audioRef.current) {
-        audioRef.current.play();
-        voiceIntervalRef.current = setInterval(() => {
-          if (audioRef.current) {
-            setVoiceProgress(prev => ({ ...prev, [msg.id]: audioRef.current.currentTime }));
-          }
-        }, 200);
+      const { sendMessage } = await import("../services/messages");
+      const data = await sendMessage(selectedUser.id, content);
+      if (data.success) {
+        setMessages(prev => {
+          if (prev.find(m => String(m.id) === String(data.message?.id))) return prev;
+          return [...prev, data.message];
+        });
+        loadConversations();
       }
-      return;
-    }
-
-    setPlayingVoice(msg.id);
-    const audio = new Audio(getVoiceMessageAudioUrl(msg.id));
-    audioRef.current = audio;
-
-    audio.ontimeupdate = () => {
-      setVoiceProgress(prev => ({ ...prev, [msg.id]: audio.currentTime }));
-    };
-
-    audio.onended = () => {
-      setPlayingVoice(null);
-      setVoiceProgress(prev => ({ ...prev, [msg.id]: 0 }));
-      clearInterval(voiceIntervalRef.current);
-    };
-
-    audio.onpause = () => clearInterval(voiceIntervalRef.current);
-    audio.onplay = () => {
-      voiceIntervalRef.current = setInterval(() => {
-        if (audioRef.current) {
-          setVoiceProgress(prev => ({ ...prev, [msg.id]: audioRef.current.currentTime }));
-        }
-      }, 200);
-    };
-
-    audio.play().catch(() => setPlayingVoice(null));
+    } catch (e) {}
   };
 
   const handleKeyDown = (e) => {
@@ -254,433 +138,233 @@ const ChatPage = ({ darkMode, currentUser }) => {
     }
   };
 
-  const handleTyping = () => {
-    if (selectedUser) {
-      clearTimeout(typingTimeoutRef.current);
-      sendWebSocketMessage({
-        type: "chat_typing",
-        to: selectedUser.extension,
-        data: { is_typing: true },
-      }).catch(() => {});
-      typingTimeoutRef.current = setTimeout(() => {
-        sendWebSocketMessage({
-          type: "chat_typing",
-          to: selectedUser.extension,
-          data: { is_typing: false },
-        }).catch(() => {});
-      }, 2000);
-    }
-  };
-
-  const filteredUsers = users.filter(u =>
-    u.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.extension?.includes(searchTerm)
+  const filteredConversations = conversations.filter(c =>
+    !searchTerm ||
+    c.user.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.user.extension?.includes(searchTerm)
   );
 
   const formatTime = (dateStr) => {
+    if (!dateStr) return "";
+    const d = new Date(dateStr);
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    if (isToday) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  };
+
+  const formatMessageTime = (dateStr) => {
+    if (!dateStr) return "";
     const d = new Date(dateStr);
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  const formatDate = (dateStr) => {
-    const d = new Date(dateStr);
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (d.toDateString() === today.toDateString()) return formatTime(dateStr);
-    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-    return d.toLocaleDateString();
+  const getInitials = (name) => (name || "?").charAt(0).toUpperCase();
+
+  const getAvatarColor = (name) => {
+    const colors = ["bg-blue-500", "bg-green-500", "bg-purple-500", "bg-orange-500", "bg-pink-500", "bg-teal-500", "bg-indigo-500", "bg-red-500"];
+    let hash = 0;
+    for (let i = 0; i < (name || "").length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
   };
 
-  const formatDuration = (s) => {
-    if (!s) return "0:00";
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${String(sec).padStart(2, "0")}`;
-  };
-
-  const renderVoiceProgress = (msg) => {
-    const current = voiceProgress[msg.id] || 0;
-    const duration = msg.duration || 0;
-    const pct = duration > 0 ? (current / duration) * 100 : 0;
-    return (
-      <div className="w-full h-1 bg-gray-300 dark:bg-gray-600 rounded-full mt-1 overflow-hidden">
-        <div className="h-full bg-blue-500 rounded-full transition-all duration-200" style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-    );
-  };
-
-  const renderCheckmarks = (msg) => {
-    if (!msg.is_read) {
-      return <FiCheck className="w-3 h-3" />;
-    }
-    return (
-      <span className="relative">
-        <FiCheck className="w-3 h-3" style={{ marginRight: '-4px' }} />
-        <FiCheck className="w-3 h-3" style={{ marginLeft: '4px', position: 'absolute', left: 0 }} />
-      </span>
-    );
-  };
+  const isUserOnline = (extension) => onlineUsers.has(extension);
 
   return (
-    <div className={cn("flex h-full", darkMode ? "text-white" : "text-gray-900")}>
-      {/* Conversations Sidebar */}
-      <div className={cn(
-        showSidebar || !selectedUser ? "flex" : "hidden md:flex",
-        "w-full md:w-72 flex-shrink-0 border-r flex-col",
-        darkMode ? "border-gray-700 bg-gray-800" : "border-gray-200 bg-white"
-      )}>
-        <div className={cn(
-          "p-3 border-b flex items-center justify-between",
-          darkMode ? "border-gray-700" : "border-gray-200"
-        )}>
-          <h2 className="font-semibold flex items-center gap-2">
-            <FiMessageSquare className="w-4 h-4" />
-            Messages
-          </h2>
-          <div className="flex items-center gap-2">
-            {unreadCount > 0 && (
-              <span className="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[18px] text-center">
-                {unreadCount}
-              </span>
-            )}
-            <button
-              onClick={() => setShowNewChat(true)}
-              className={cn(
-                "p-1.5 rounded-lg transition-colors",
-                darkMode ? "hover:bg-gray-700" : "hover:bg-gray-100"
-              )}
-              title="New conversation"
-            >
-              <FiUsers className="w-4 h-4" />
-            </button>
+    <div className="flex h-full" style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+      {/* Left Panel - Conversations */}
+      <div className={`${showSidebar || !selectedUser ? "flex" : "hidden md:flex"} w-full md:w-96 flex-shrink-0 border-r flex-col ${darkMode ? "border-gray-700 bg-gray-900" : "border-gray-200 bg-white"}`}>
+        {/* Header */}
+        <div className={`px-4 py-3 border-b ${darkMode ? "border-gray-700 bg-gray-850" : "border-gray-200 bg-gray-50"}`}>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold">Chats</h2>
+            <span className="text-xs text-gray-400">{conversations.length} conversations</span>
+          </div>
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search or start a new chat..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className={`w-full pl-9 pr-3 py-2 rounded-lg text-sm outline-none ${darkMode ? "bg-gray-800 text-white placeholder-gray-500 border border-gray-700" : "bg-gray-100 text-gray-900 border border-gray-200"}`}
+            />
           </div>
         </div>
 
-        {showNewChat ? (
-          <div className="flex flex-col flex-1">
-            <div className={cn(
-              "p-2 border-b",
-              darkMode ? "border-gray-700" : "border-gray-200"
-            )}>
-              <button
-                onClick={() => setShowNewChat(false)}
-                className="flex items-center gap-1 text-sm text-blue-500 mb-2"
-              >
-                <FiChevronLeft className="w-4 h-4" /> Back
-              </button>
-              <div className="relative">
-                <FiSearch className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search users by name or extension..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className={cn(
-                    "w-full pl-9 pr-3 py-2 rounded-lg text-sm border",
-                    darkMode
-                      ? "bg-gray-700 border-gray-600 text-white"
-                      : "bg-gray-50 border-gray-200 text-gray-900"
-                  )}
-                />
+        {/* Conversation List */}
+        <div className="flex-1 overflow-y-auto">
+          {filteredConversations.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400 p-8">
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-3 ${darkMode ? "bg-gray-800" : "bg-gray-100"}`}>
+                <FiSearch className="w-6 h-6" />
               </div>
+              <p className="text-sm font-medium">No conversations yet</p>
+              <p className="text-xs mt-1 text-center">Search for a user to start a new conversation</p>
             </div>
-            <div className="flex-1 overflow-y-auto">
-              {filteredUsers.map((user) => (
+          ) : (
+            filteredConversations.map((conv) => {
+              const convUser = conv.user;
+              const isSelected = selectedUser?.id === convUser.id;
+              const online = isUserOnline(convUser.extension);
+              return (
                 <button
-                  key={user.id}
-                  onClick={() => loadMessages(user)}
-                  className={cn(
-                    "w-full flex items-center gap-3 p-3 text-left transition-colors",
-                    darkMode ? "hover:bg-gray-700" : "hover:bg-gray-50"
-                  )}
-                >
-                  <div className="relative">
-                    <div className={cn(
-                      "w-9 h-9 rounded-full flex items-center justify-center text-sm font-medium",
-                      darkMode ? "bg-gray-600" : "bg-blue-100 text-blue-600"
-                    )}>
-                      {user.username?.charAt(0).toUpperCase()}
-                    </div>
-                    {user.status === "online" && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{user.username}</p>
-                    <p className="text-xs text-gray-400 truncate">Ext: {user.extension}</p>
-                  </div>
-                </button>
-              ))}
-              {filteredUsers.length === 0 && (
-                <p className="text-sm text-gray-400 text-center py-4">No users found</p>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto">
-            {conversations.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-gray-400 p-4">
-                <FiMessageSquare className="w-10 h-10 mb-2" />
-                <p className="text-sm">No conversations yet</p>
-                <button
-                  onClick={() => setShowNewChat(true)}
-                  className="text-blue-500 text-sm mt-2 hover:underline"
-                >
-                  Start a new chat
-                </button>
-              </div>
-            ) : (
-              conversations.map((conv) => (
-                <button
-                  key={conv.conversation_id}
-                  onClick={() => loadMessages(conv.user)}
-                  className={cn(
-                    "w-full flex items-center gap-3 p-3 text-left transition-colors",
-                    selectedUser?.id === conv.user.id
+                  key={conv.conversation_id || convUser.id}
+                  onClick={() => loadMessages(convUser)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors border-b ${darkMode ? "border-gray-800" : "border-gray-100"} ${
+                    isSelected
                       ? darkMode ? "bg-gray-700" : "bg-blue-50"
-                      : darkMode ? "hover:bg-gray-700" : "hover:bg-gray-50"
-                  )}
+                      : darkMode ? "hover:bg-gray-800" : "hover:bg-gray-50"
+                  }`}
                 >
-                  <div className="relative">
-                    <div className={cn(
-                      "w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium",
-                      darkMode ? "bg-gray-600" : "bg-blue-100 text-blue-600"
-                    )}>
-                      {conv.user.username?.charAt(0).toUpperCase()}
+                  {/* Avatar */}
+                  <div className="relative flex-shrink-0">
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-sm font-medium ${getAvatarColor(convUser.username)}`}>
+                      {getInitials(convUser.username)}
                     </div>
-                    {conv.user.status === "online" && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800" />
+                    {online && (
+                      <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-white dark:border-gray-900" />
                     )}
                   </div>
+                  {/* Content */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-center">
-                      <p className="text-sm font-medium truncate">{conv.user.username}</p>
-                      <p className="text-xs text-gray-400">{conv.last_message_at ? formatDate(conv.last_message_at) : ""}</p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium truncate">{convUser.username}</p>
+                      <p className="text-[11px] text-gray-400 flex-shrink-0 ml-2">{conv.last_message_at ? formatTime(conv.last_message_at) : ""}</p>
                     </div>
-                    <p className="text-xs text-gray-400 truncate">{conv.last_message || "No messages yet"}</p>
+                    <p className="text-[11px] text-gray-400">Ext: {convUser.extension}</p>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <p className={`text-xs truncate ${conv.last_message ? (darkMode ? "text-gray-400" : "text-gray-500") : "text-gray-400 italic"}`}>
+                        {conv.last_message || "No messages yet"}
+                      </p>
+                    </div>
                   </div>
+                  {/* Unread Badge */}
                   {conv.unread_count > 0 && (
-                    <span className="bg-blue-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[18px] text-center flex-shrink-0">
-                      {conv.unread_count}
-                    </span>
+                    <div className="flex-shrink-0">
+                      <span className="bg-green-500 text-white text-[11px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5">
+                        {conv.unread_count > 99 ? '99+' : conv.unread_count}
+                      </span>
+                    </div>
                   )}
                 </button>
-              ))
-            )}
-          </div>
-        )}
+              );
+            })
+          )}
+        </div>
       </div>
 
-      {/* Chat Area - WhatsApp Style */}
-      <div className={cn(
-        !selectedUser ? "hidden md:flex" : "flex",
-        "flex-1 flex-col"
-      )}>
+      {/* Right Panel - Chat Area */}
+      <div className={`${!selectedUser ? "hidden md:flex" : "flex"} flex-1 flex-col`}>
         {selectedUser ? (
           <>
-            {/* WhatsApp-style Chat Header */}
-            <div className={cn(
-              "px-4 py-2 border-b flex items-center gap-3",
-              darkMode ? "border-gray-700 bg-gray-800" : "border-gray-200 bg-white",
-              "shadow-sm"
-            )}>
-              <button
-                onClick={() => { setSelectedUser(null); setMessages([]); setShowSidebar(true); }}
-                className="md:hidden p-1"
-              >
+            {/* Chat Header */}
+            <div className={`px-4 py-2.5 border-b flex items-center gap-3 ${darkMode ? "border-gray-700 bg-gray-850" : "border-gray-200 bg-gray-50"} shadow-sm`}>
+              <button onClick={() => { setSelectedUser(null); setMessages([]); setShowSidebar(true); }} className="md:hidden p-1">
                 <FiChevronLeft className="w-5 h-5" />
               </button>
-              <div className="relative">
-                <div className={cn(
-                  "w-9 h-9 rounded-full flex items-center justify-center text-sm font-medium",
-                  darkMode ? "bg-gray-600" : "bg-blue-100 text-blue-600"
-                )}>
-                  {selectedUser.username?.charAt(0).toUpperCase()}
+              <div className="relative flex-shrink-0">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-medium ${getAvatarColor(selectedUser.username)}`}>
+                  {getInitials(selectedUser.username)}
                 </div>
-                {selectedUser.status === "online" && (
-                  <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-white dark:border-gray-800" />
+                {isUserOnline(selectedUser.extension) && (
+                  <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800" />
                 )}
               </div>
-              <div className="flex-1">
-                <p className="font-medium text-sm">{selectedUser.username}</p>
-                <p className="text-xs text-gray-400">
-                  {selectedUser.status === "online" ? "Online" : "Offline"}
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm truncate">{selectedUser.username}</p>
+                <p className="text-[11px] text-gray-400">
+                  {isUserOnline(selectedUser.extension) ? "Online" : "Offline"} · Ext: {selectedUser.extension}
                 </p>
               </div>
             </div>
 
-            {/* WhatsApp-style Messages Area */}
-            <div className={cn(
-              "flex-1 overflow-y-auto px-3 py-2",
-              darkMode ? "bg-gray-900" : "bg-[#e5ddd5]"
-            )}
-              style={!darkMode ? { backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23d4d4d4\' fill-opacity=\'0.15\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")' } : {}}
-            >
-              <AnimatePresence initial={false}>
-                {messages.map((msg, idx) => {
-                  const isMine = String(msg.sender_id) === String(currentUserId);
-                  const showAvatar = !isMine && (idx === 0 || messages[idx - 1]?.sender_id !== msg.sender_id);
-                  return (
-                    <motion.div
-                      key={msg.id || idx}
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                      className={cn("flex mb-1", isMine ? "justify-end" : "justify-start")}
-                    >
-                      <div className={cn("flex items-end gap-1 max-w-[75%]", isMine ? "flex-row-reverse" : "flex-row")}>
-                        {showAvatar && (
-                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0 bg-blue-100 text-blue-600">
-                            {msg.sender?.username?.charAt(0).toUpperCase() || selectedUser.username?.charAt(0).toUpperCase()}
+            {/* Messages Area - WhatsApp style */}
+            <div className={`flex-1 overflow-y-auto px-4 py-3 ${darkMode ? "bg-gray-900" : "bg-[#efeae2]"}`}>
+              {messages.length === 0 ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <p className="text-sm text-gray-400">No messages yet</p>
+                    <p className="text-xs text-gray-400 mt-1">Send a message to start the conversation</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {messages.map((msg, idx) => {
+                    const isMine = String(msg.sender_id) === String(currentUserId);
+                    const showDate = idx === 0 || new Date(msg.created_at).toDateString() !== new Date(messages[idx - 1]?.created_at).toDateString();
+                    return (
+                      <div key={msg.id || idx}>
+                        {showDate && (
+                          <div className="flex justify-center my-2">
+                            <span className={`text-[11px] px-2 py-0.5 rounded ${darkMode ? "bg-gray-800 text-gray-400" : "bg-white/80 text-gray-500 shadow-sm"}`}>
+                              {formatTime(msg.created_at)}
+                            </span>
                           </div>
                         )}
-                        {!showAvatar && !isMine && <div className="w-7 flex-shrink-0" />}
-                        <div className={cn(
-                          "px-3 py-1.5 shadow-sm relative",
-                          isMine
-                            ? "bg-[#dcf8c6] dark:bg-[#056162] text-gray-900 dark:text-white rounded-lg rounded-br-sm"
-                            : "bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-lg rounded-bl-sm",
-                        )}>
-                          {msg.msg_type === "voice" ? (
-                            <div className="flex flex-col gap-1 min-w-[160px]">
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => handlePlayVoice(msg)}
-                                  className={cn(
-                                    "p-1.5 rounded-full transition-colors flex-shrink-0",
-                                    playingVoice === msg.id
-                                      ? "bg-blue-500 text-white"
-                                      : isMine ? "hover:bg-green-300 dark:hover:bg-gray-600" : "hover:bg-gray-200 dark:hover:bg-gray-600"
-                                  )}
-                                >
-                                  {playingVoice === msg.id ? <FiPause className="w-4 h-4" /> : <FiPlay className="w-4 h-4" />}
-                                </button>
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-1">
-                                    <FiVolume2 className="w-3 h-3 opacity-70 flex-shrink-0" />
-                                    <span className="text-xs">{formatDuration(msg.duration)}</span>
-                                  </div>
-                                </div>
-                              </div>
-                              {renderVoiceProgress(msg)}
-                              <div className={cn(
-                                "flex items-center justify-end gap-1 -mb-1",
-                                isMine ? "text-gray-500 dark:text-gray-300" : "text-gray-400 dark:text-gray-400"
-                              )}>
-                                <span className="text-[10px]">{formatTime(msg.created_at)}</span>
-                                {isMine && (
-                                  <span className="text-[10px] opacity-70">
-                                    {renderCheckmarks(msg)}
-                                  </span>
-                                )}
-                              </div>
+                        <div className={`flex ${isMine ? "justify-end" : "justify-start"} mb-0.5`}>
+                          <div className={`max-w-[70%] px-3 py-1.5 shadow-sm relative text-sm leading-relaxed ${
+                            isMine
+                              ? "bg-[#d9fdd3] dark:bg-[#005c4b] text-gray-900 dark:text-white rounded-lg rounded-br-sm"
+                              : "bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-lg rounded-bl-sm"
+                          }`}>
+                            <p className="whitespace-pre-wrap break-words pr-12">{msg.content}</p>
+                            <div className={`absolute bottom-0.5 right-1.5 flex items-center gap-0.5 ${isMine ? "text-gray-500 dark:text-gray-300" : "text-gray-400"}`}>
+                              <span className="text-[10px]">{formatMessageTime(msg.created_at)}</span>
+                              {isMine && (
+                                msg.is_read
+                                  ? <FiCheck className="w-3 h-3 text-blue-500" />
+                                  : <FiClock className="w-3 h-3 opacity-60" />
+                              )}
                             </div>
-                          ) : (
-                            <>
-                              <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
-                              <div className={cn(
-                                "flex items-center justify-end gap-1 -mb-1",
-                                isMine ? "text-gray-500 dark:text-gray-300" : "text-gray-400 dark:text-gray-400"
-                              )}>
-                                <span className="text-[10px]">{formatTime(msg.created_at)}</span>
-                                {isMine && (
-                                  <span className="text-[10px] opacity-70">
-                                    {renderCheckmarks(msg)}
-                                  </span>
-                                )}
-                              </div>
-                            </>
-                          )}
+                          </div>
                         </div>
                       </div>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
-
-              {/* Typing Indicator */}
-              {typingUser && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="flex justify-start mb-1"
-                >
-                  <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg rounded-bl-sm shadow-sm">
-                    <div className="flex gap-1 items-center">
-                      <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                      <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                      <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                    </div>
-                  </div>
-                </motion.div>
+                    );
+                  })}
+                </div>
               )}
               <div ref={messagesEndRef} />
             </div>
 
-            {/* WhatsApp-style Input Area */}
-            <div className={cn(
-              "px-3 py-2 border-t",
-              darkMode ? "border-gray-700 bg-gray-800" : "border-gray-200 bg-gray-50"
-            )}>
-              {isRecording ? (
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 flex-1 bg-white dark:bg-gray-700 rounded-xl px-3 py-2">
-                    <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-                    <span className="text-sm font-medium text-red-500">
-                      Recording {formatDuration(recordingDuration)}
-                    </span>
-                  </div>
+            {/* Input Area */}
+            <div className={`px-4 py-2.5 border-t ${darkMode ? "border-gray-700 bg-gray-850" : "border-gray-200 bg-gray-50"}`}>
+              <div className="flex items-center gap-2">
+                <div className={`flex-1 flex items-center gap-2 rounded-xl px-3 py-1.5 border ${darkMode ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`}>
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Type a message..."
+                    className={`flex-1 bg-transparent text-sm outline-none py-1 ${darkMode ? "text-white placeholder-gray-500" : "text-gray-900"}`}
+                  />
                   <button
-                    onClick={stopRecording}
-                    className="p-2.5 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors"
-                    title="Stop recording"
+                    onClick={handleSend}
+                    disabled={!newMessage.trim()}
+                    className="p-1 text-blue-500 hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   >
-                    <FiSquare className="w-4 h-4" />
+                    <FiSend className="w-5 h-5" />
                   </button>
                 </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={startRecording}
-                    className={cn(
-                      "p-2.5 rounded-xl transition-colors",
-                      darkMode
-                        ? "hover:bg-gray-700 text-gray-400 hover:text-white"
-                        : "hover:bg-gray-200 text-gray-500 hover:text-gray-700"
-                    )}
-                    title="Record voice message"
-                  >
-                    <FiMic className="w-4 h-4" />
-                  </button>
-                  <div className="flex-1 flex items-center gap-2 bg-white dark:bg-gray-700 rounded-xl px-3 py-1 border dark:border-gray-600">
-                    <input
-                      ref={inputRef}
-                      type="text"
-                      value={newMessage}
-                      onChange={(e) => { setNewMessage(e.target.value); handleTyping(); }}
-                      onKeyDown={handleKeyDown}
-                      placeholder="Type a message..."
-                      className="flex-1 bg-transparent text-sm outline-none py-1.5"
-                    />
-                    <button
-                      onClick={handleSend}
-                      disabled={!newMessage.trim()}
-                      className="p-1.5 text-blue-500 hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <FiSend className="w-5 h-5" />
-                    </button>
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-400">
+          /* Empty state - no conversation selected */
+          <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
-              <FiMessageSquare className="w-16 h-16 mx-auto mb-3 opacity-50" />
-              <p className="text-lg font-medium">Select a conversation</p>
-              <p className="text-sm mt-1">Choose a user from the list to start chatting</p>
+              <div className={`w-24 h-24 mx-auto mb-6 rounded-full flex items-center justify-center ${darkMode ? "bg-gray-800" : "bg-gray-100"}`}>
+                <svg viewBox="0 0 24 24" className={`w-12 h-12 ${darkMode ? "text-gray-600" : "text-gray-300"}`} fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
+                </svg>
+              </div>
+              <p className={`text-lg font-medium mb-1 ${darkMode ? "text-gray-300" : "text-gray-600"}`}>Select a chat</p>
+              <p className={`text-sm ${darkMode ? "text-gray-500" : "text-gray-400"}`}>Choose a conversation from the left panel to start messaging</p>
             </div>
           </div>
         )}

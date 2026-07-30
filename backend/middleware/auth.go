@@ -22,11 +22,10 @@ func AuthMiddleware() gin.HandlerFunc {
 				})
 				c.Abort()
 				return
-			}
-			tokenString = strings.TrimPrefix(authHeader, "Bearer ")
-		} else {
-			// Fallback to query parameter token (for audio/image URLs)
+		} else if c.Request.Method == "GET" {
 			tokenString = c.Query("token")
+		}
+			tokenString = strings.TrimPrefix(authHeader, "Bearer ")
 		}
 
 		if tokenString == "" {

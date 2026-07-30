@@ -279,8 +279,8 @@ class AsteriskConfigHelper {
 // Create singleton instance
 const asteriskConfigHelper = new AsteriskConfigHelper();
 
-// Make available globally for debugging
-if (typeof window !== 'undefined') {
+// Make available globally for debugging (development only)
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
   window.asteriskConfigHelper = asteriskConfigHelper;
 }
 

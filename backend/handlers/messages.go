@@ -425,7 +425,12 @@ func GetVoiceMessageAudio(c *gin.Context) {
 		return
 	}
 
-	c.File(msg.FilePath)
+	safePath, err := security.SafeFilePath(messageVoiceDir, msg.FilePath)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Access denied"})
+		return
+	}
+	c.File(safePath)
 }
 
 func updateConversation(user1ID, user2ID uint, lastMessage string, lastMsgAt time.Time) {

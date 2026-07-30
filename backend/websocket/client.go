@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"voip-backend/auth"
 	"voip-backend/config"
 
 	"github.com/gin-gonic/gin"
@@ -370,6 +371,31 @@ func HandleWebSocket(c *gin.Context) {
 		return
 	}
 
+	// Find token from header or query param
+	token := c.Query("token")
+	authHeader := c.GetHeader("Authorization")
+	if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+
+	// Validate token
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
+		return
+	}
+
+	claims, err := validateToken(token)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+		return
+	}
+
+	// Verify the extension matches the token
+	if claims.Extension != extension {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Extension mismatch"})
+		return
+	}
+
 	// Check for duplicate connections (max 3 per extension)
 	hub := GetHub()
 	if hub != nil {
@@ -379,12 +405,6 @@ func HandleWebSocket(c *gin.Context) {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many connections for this extension"})
 			return
 		}
-	}
-
-	// Optional: Validate token for authenticated connections
-	token := c.Query("token")
-	if token != "" {
-		log.Printf("WebSocket connection with token for extension: %s", extension)
 	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -403,11 +423,18 @@ func HandleWebSocket(c *gin.Context) {
 
 	client.hub.register <- client
 
-	// Allow collection of memory referenced by the caller by doing all work in new goroutines
 	go client.writePump()
 	go client.readPump()
 
 	log.Printf("WebSocket client connected: %s (extension: %s)", client.ID, extension)
+}
+
+func validateToken(tokenString string) (*auth.Claims, error) {
+	claims, err := auth.ValidateToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
 
 // generateClientID generates a unique client ID

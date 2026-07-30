@@ -2,13 +2,152 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import {
   FiPhoneOff, FiMic, FiMicOff, FiVideo, FiVideoOff,
-  FiMonitor, FiCamera, FiSettings, FiMaximize, FiMinimize
+  FiMonitor, FiCamera, FiSettings, FiMaximize, FiMinimize,
+  FiSearch, FiUsers
 } from "react-icons/fi";
 import { cn } from "../utils/ui";
 import { getWebSocket, sendWebSocketMessage } from "../services/websocketservice";
+import { getUsers } from "../services/users";
 import toast from "react-hot-toast";
 
-const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoing" }) => {
+const VideoCallList = ({ darkMode, user, onStartCall, onAcceptIncoming, incomingCall }) => {
+  const [contacts, setContacts] = useState([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const currentUserId = localStorage.getItem("user_id");
+
+  useEffect(() => {
+    loadContacts();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadContacts = async () => {
+    try {
+      const data = await getUsers();
+      if (data.success) {
+        setContacts(data.users.filter(u => String(u.id) !== currentUserId));
+      }
+    } catch (e) {
+      console.error("Failed to load contacts", e);
+    }
+  };
+
+  const filteredContacts = contacts.filter(c =>
+    !searchTerm ||
+    c.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.extension?.includes(searchTerm)
+  );
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className={cn(
+        "p-4 border-b flex-shrink-0",
+        darkMode ? "border-gray-700 bg-gray-800" : "border-gray-200 bg-white"
+      )}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-bold text-lg flex items-center gap-2">
+            <FiVideo className="w-5 h-5" />
+            Video Calls
+          </h2>
+          <span className={cn(
+            "text-xs px-2 py-1 rounded-full",
+            darkMode ? "bg-gray-700 text-gray-300" : "bg-gray-100 text-gray-600"
+          )}>
+            {filteredContacts.length} contact{filteredContacts.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+        <div className="relative">
+          <FiSearch className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search by name or extension..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className={cn(
+              "w-full pl-9 pr-3 py-2 rounded-lg text-sm border outline-none",
+              darkMode
+                ? "bg-gray-700 border-gray-600 text-white placeholder-gray-400"
+                : "bg-gray-50 border-gray-200 text-gray-900"
+            )}
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {filteredContacts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-400 p-4">
+            <FiUsers className="w-12 h-12 mb-2" />
+            <p className="text-sm">No contacts available</p>
+          </div>
+        ) : (
+          <div className="p-3 space-y-2">
+            {filteredContacts.map((contact) => (
+              <motion.div
+                key={contact.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={cn(
+                  "flex items-center gap-3 p-3 rounded-xl transition-colors",
+                  darkMode ? "hover:bg-gray-700 bg-gray-800" : "hover:bg-gray-50 bg-white shadow-sm"
+                )}
+              >
+                <div className="relative flex-shrink-0">
+                  <div className={cn(
+                    "w-12 h-12 rounded-full flex items-center justify-center text-base font-medium",
+                    darkMode ? "bg-gray-600" : "bg-blue-100 text-blue-600"
+                  )}>
+                    {contact.username?.charAt(0).toUpperCase()}
+                  </div>
+                  {contact.status === "online" && (
+                    <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-900" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{contact.username}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className={cn(
+                      "text-xs",
+                      contact.status === "online" ? "text-green-500" : "text-gray-400"
+                    )}>
+                      {contact.status === "online" ? "Online" : "Offline"}
+                    </span>
+                    <span className="text-xs text-gray-400">Ext: {contact.extension}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onStartCall(contact)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors flex-shrink-0",
+                    "bg-blue-500 text-white hover:bg-blue-600"
+                  )}
+                >
+                  <FiVideo className="w-4 h-4" />
+                  <span className="hidden sm:inline">Video Call</span>
+                </button>
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ControlButton = ({ icon: Icon, label, active, danger, onClick }) => (
+  <button
+    onClick={onClick}
+    className={cn(
+      "p-3 rounded-full transition-all active:scale-95 flex flex-col items-center gap-1",
+      active && "bg-green-600 text-white",
+      danger && "bg-red-600 text-white",
+      !active && !danger && "bg-gray-700 text-gray-300 hover:bg-gray-600"
+    )}
+    title={label}
+  >
+    <Icon className="w-5 h-5" />
+    <span className="text-[10px] hidden sm:inline">{label}</span>
+  </button>
+);
+
+const VideoCallActive = ({ darkMode, contact, onEndCall }) => {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -25,7 +164,7 @@ const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoin
   const [showSettings, setShowSettings] = useState(false);
   const [networkQuality, setNetworkQuality] = useState("good");
   const [isPiP, setIsPiP] = useState(false);
-  const [callState, setCallState] = useState(callType === "incoming" ? "ringing" : "calling");
+  const [callState, setCallState] = useState("calling");
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -34,25 +173,18 @@ const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoin
   const timerRef = useRef(null);
   const iceBufferRef = useRef([]);
   const offerAnswerDoneRef = useRef(false);
-  const listenerCleanupRef = useRef(null);
 
-  const currentUserId = localStorage.getItem("user_id");
   const currentExtension = localStorage.getItem("extension");
   const currentUsername = localStorage.getItem("username");
-
-  const contactName = contact?.name || contact?.username || contact?.extension || user?.username || "User";
-  const contactExt = contact?.extension || "";
+  const currentUserId = localStorage.getItem("user_id");
   const targetExtension = contact?.extension || "";
 
   useEffect(() => {
-    if (targetExtension && callType === "outgoing") {
-      initCall();
-    }
+    initCall();
     enumerateDevices();
     const cleanup = setupWebSocketListener();
     return () => {
       if (cleanup) cleanup();
-      cleanup();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -97,10 +229,7 @@ const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoin
           case "webrtc_call_ended":
             handleRemoteEnded();
             break;
-          case "incoming_call":
-            if (data.video) {
-              setCallState("ringing");
-            }
+          default:
             break;
         }
       } catch (e) {}
@@ -116,18 +245,16 @@ const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoin
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
       });
       setLocalStream(stream);
-      if (callType === "outgoing") {
-        setCallState("calling");
-        await createPeerConnection(stream);
-        await sendWebSocketMessage({
-          type: "video_call_request",
-          to: targetExtension,
-          from: currentExtension,
-          fromUsername: currentUsername,
-          caller_id: currentUserId
-        });
-        await createOffer();
-      }
+      setCallState("calling");
+      await createPeerConnection(stream);
+      await sendWebSocketMessage({
+        type: "video_call_request",
+        to: targetExtension,
+        from: currentExtension,
+        fromUsername: currentUsername,
+        caller_id: currentUserId
+      });
+      await createOffer();
     } catch (err) {
       console.error("Failed to get media:", err);
       toast.error("Camera/microphone access denied");
@@ -406,6 +533,9 @@ const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoin
     }
   };
 
+  const contactName = contact?.name || contact?.username || contact?.extension || "User";
+  const contactExt = contact?.extension || "";
+
   return (
     <div ref={containerRef} className={cn("h-full flex flex-col relative overflow-hidden", darkMode ? "bg-gray-900" : "bg-gray-100")}>
       <div className="flex-1 relative bg-black">
@@ -435,16 +565,6 @@ const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoin
             </div>
           </div>
         </div>
-
-        {callState === "ringing" && !isConnected && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-            <div className="w-20 h-20 rounded-full bg-green-500 flex items-center justify-center mb-4 animate-pulse">
-              <FiVideo className="w-8 h-8" />
-            </div>
-            <p className="text-lg font-semibold">Incoming Video Call</p>
-            <p className="text-sm text-gray-300">from {contactName}</p>
-          </div>
-        )}
 
         {callState === "calling" && !isConnected && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
@@ -507,11 +627,127 @@ const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoin
   );
 };
 
-const ControlButton = ({ icon: Icon, label, active, danger, onClick }) => (
-  <button onClick={onClick} className={cn("p-3 rounded-full transition-all active:scale-95 flex flex-col items-center gap-1", active && "bg-green-600 text-white", danger && "bg-red-600 text-white", !active && !danger && "bg-gray-700 text-gray-300 hover:bg-gray-600")} title={label}>
-    <Icon className="w-5 h-5" />
-    <span className="text-[10px]">{label}</span>
-  </button>
-);
+const IncomingVideoCall = ({ darkMode, contact, onAccept, onReject }) => {
+  const contactName = contact?.name || contact?.username || contact?.extension || "Unknown";
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center bg-black/80 p-8">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="text-center"
+      >
+        <div className="w-24 h-24 rounded-full bg-blue-500 flex items-center justify-center mb-6 mx-auto animate-pulse shadow-lg shadow-blue-500/50">
+          <FiVideo className="w-10 h-10 text-white" />
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-2">Incoming Video Call</h2>
+        <div className="flex items-center justify-center gap-3 mb-6">
+          <div className={cn(
+            "w-12 h-12 rounded-full flex items-center justify-center text-lg font-medium",
+            darkMode ? "bg-gray-600" : "bg-blue-100 text-blue-600"
+          )}>
+            {contactName.charAt(0).toUpperCase()}
+          </div>
+          <div className="text-left">
+            <p className="text-white font-semibold text-lg">{contactName}</p>
+            <p className="text-gray-300 text-sm">Ext: {contact?.extension || ""}</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-center gap-6">
+          <button
+            onClick={onReject}
+            className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-full hover:bg-red-700 transition-all shadow-lg hover:shadow-red-500/40"
+          >
+            <FiPhoneOff className="w-5 h-5" />
+            Reject
+          </button>
+          <button
+            onClick={onAccept}
+            className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-full hover:bg-green-700 transition-all shadow-lg hover:shadow-green-500/40"
+          >
+            <FiVideo className="w-5 h-5" />
+            Accept
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const VideoCallPage = ({ darkMode, user, contact, onEndCall, callType = "outgoing" }) => {
+  const [inCall, setInCall] = useState(false);
+  const [callContact, setCallContact] = useState(null);
+  const [showIncoming, setShowIncoming] = useState(false);
+
+  useEffect(() => {
+    if (contact && callType === "incoming") {
+      setCallContact(contact);
+      setShowIncoming(true);
+    }
+  }, [contact, callType]);
+
+  const handleStartCall = (selectedContact) => {
+    setCallContact(selectedContact);
+    setInCall(true);
+  };
+
+  const handleAcceptIncoming = () => {
+    setShowIncoming(false);
+    setInCall(true);
+    sendWebSocketMessage({
+      type: "webrtc_call_accepted",
+      to: callContact?.extension,
+      from: localStorage.getItem("extension"),
+      video: true
+    }).catch(() => {});
+  };
+
+  const handleRejectIncoming = () => {
+    setShowIncoming(false);
+    setCallContact(null);
+    sendWebSocketMessage({
+      type: "webrtc_call_rejected",
+      to: callContact?.extension,
+      from: localStorage.getItem("extension"),
+      video: true
+    }).catch(() => {});
+    if (onEndCall) onEndCall();
+  };
+
+  const handleEndCall = () => {
+    setInCall(false);
+    setCallContact(null);
+    if (onEndCall) onEndCall();
+  };
+
+  if (showIncoming && callContact) {
+    return (
+      <IncomingVideoCall
+        darkMode={darkMode}
+        contact={callContact}
+        onAccept={handleAcceptIncoming}
+        onReject={handleRejectIncoming}
+      />
+    );
+  }
+
+  if (inCall && callContact) {
+    return (
+      <VideoCallActive
+        darkMode={darkMode}
+        contact={callContact}
+        onEndCall={handleEndCall}
+      />
+    );
+  }
+
+  return (
+    <VideoCallList
+      darkMode={darkMode}
+      user={user}
+      onStartCall={handleStartCall}
+    />
+  );
+};
 
 export default VideoCallPage;

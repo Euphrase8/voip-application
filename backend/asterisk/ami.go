@@ -24,6 +24,12 @@ type AMIClient struct {
 	lastPing       time.Time
 	reconnectMutex sync.Mutex
 	healthMutex    sync.RWMutex
+
+	// ActionID tracking for command-response matching
+	actionCounter uint32
+	pendingMu     sync.Mutex
+	pending       map[string]chan AMIResponse
+	readLoopDone  chan struct{}
 }
 
 type AMIEvent struct {
@@ -35,6 +41,12 @@ type AMICommand struct {
 	Action   string
 	Fields   map[string]string
 	Response chan AMIResponse
+}
+
+// pendingResponse tracks an expected command response
+type pendingResponse struct {
+	fields map[string]string
+	done   chan struct{}
 }
 
 type AMIResponse struct {
@@ -71,7 +83,6 @@ func InitAMI() error {
 
 	amiClient = client
 	amiEverConnected.Store(true)
-	go amiClient.handleEvents()
 	go amiClient.startHealthMonitoring()
 
 	log.Println("AMI client initialized successfully")
@@ -132,7 +143,6 @@ func reconnectAMI() error {
 
 	amiClient = client
 	amiEverConnected.Store(true)
-	go amiClient.handleEvents()
 	go amiClient.startHealthMonitoring()
 
 	return nil
@@ -149,13 +159,15 @@ func NewAMIClient() (*AMIClient, error) {
 	}
 
 	client := &AMIClient{
-		conn:      conn,
-		reader:    bufio.NewReader(conn),
-		events:    make(chan AMIEvent, 100),
-		commands:  make(chan AMICommand, 10),
-		quit:      make(chan bool),
-		connected: false,
-		lastPing:  time.Now(),
+		conn:         conn,
+		reader:       bufio.NewReader(conn),
+		events:       make(chan AMIEvent, 100),
+		commands:     make(chan AMICommand, 10),
+		quit:         make(chan bool),
+		connected:    false,
+		lastPing:     time.Now(),
+		pending:      make(map[string]chan AMIResponse),
+		readLoopDone: make(chan struct{}),
 	}
 
 	// Read the initial greeting
@@ -172,6 +184,8 @@ func NewAMIClient() (*AMIClient, error) {
 		return nil, fmt.Errorf("AMI login failed: %v", err)
 	}
 
+	// Start the single read loop that handles both events and command responses
+	go client.readLoop()
 	go client.handleConnection()
 
 	// Mark as connected after successful login
@@ -211,30 +225,18 @@ func (c *AMIClient) login() error {
 	return nil
 }
 
-// handleConnection handles the AMI connection
-func (c *AMIClient) handleConnection() {
-	for {
-		select {
-		case cmd := <-c.commands:
-			c.executeCommand(cmd)
-		case <-c.quit:
-			return
-		}
-	}
-}
+// readLoop is the single goroutine that reads all data from the AMI connection
+func (c *AMIClient) readLoop() {
+	defer close(c.readLoopDone)
 
-// handleEvents processes AMI events
-func (c *AMIClient) handleEvents() {
 	for {
 		response, err := c.readResponse()
 		if err != nil {
-			log.Printf("Error reading AMI response: %v", err)
-			// Mark as disconnected on read errors
+			log.Printf("[AMI] Error reading response: %v", err)
 			c.healthMutex.Lock()
 			c.connected = false
 			c.healthMutex.Unlock()
 
-			// Trigger reconnection
 			go func() {
 				time.Sleep(5 * time.Second)
 				startReconnectionLoop()
@@ -242,33 +244,48 @@ func (c *AMIClient) handleEvents() {
 			return
 		}
 
-		if response.Fields["Event"] != "" {
+		// Check if this is a response to a pending command
+		if actionID, ok := response.Fields["ActionID"]; ok {
+			c.pendingMu.Lock()
+			ch, hasPending := c.pending[actionID]
+			if hasPending {
+				delete(c.pending, actionID)
+			}
+			c.pendingMu.Unlock()
+
+			if hasPending {
+				ch <- response
+				close(ch)
+				continue
+			}
+		}
+
+		// Check if this is an event
+		if eventName := response.Fields["Event"]; eventName != "" {
 			event := AMIEvent{
-				Type:   response.Fields["Event"],
+				Type:   eventName,
 				Fields: response.Fields,
 			}
-
 			select {
 			case c.events <- event:
 			default:
-				log.Println("Event channel full, dropping event")
+				log.Println("[AMI] Event channel full, dropping event:", eventName)
 			}
 		}
 	}
 }
 
-// readResponse reads a complete AMI response
+// readResponse reads a complete AMI response (delimited by blank line)
 func (c *AMIClient) readResponse() (AMIResponse, error) {
 	fields := make(map[string]string)
 
 	for {
 		line, err := c.reader.ReadString('\n')
 		if err != nil {
-			log.Printf("[AMI] Error reading response line: %v", err)
-			return AMIResponse{}, err
+			return AMIResponse{}, fmt.Errorf("read error: %w", err)
 		}
 
-		line = strings.TrimSpace(line)
+		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
 			break
 		}
@@ -281,8 +298,6 @@ func (c *AMIClient) readResponse() (AMIResponse, error) {
 
 	success := fields["Response"] == "Success"
 
-	log.Printf("[AMI] Response received: Success=%t, Fields=%+v", success, fields)
-
 	return AMIResponse{
 		Success: success,
 		Fields:  fields,
@@ -290,11 +305,28 @@ func (c *AMIClient) readResponse() (AMIResponse, error) {
 	}, nil
 }
 
-// executeCommand executes an AMI command
+// executeCommand writes an AMI command and waits for its response via ActionID
 func (c *AMIClient) executeCommand(cmd AMICommand) {
+	// Generate unique ActionID
+	actionID := fmt.Sprintf("%s-%d", cmd.Action, atomic.AddUint32(&c.actionCounter, 1))
+
+	// Register pending response channel
+	respCh := make(chan AMIResponse, 1)
+	c.pendingMu.Lock()
+	c.pending[actionID] = respCh
+	c.pendingMu.Unlock()
+
+	// Remove the pending entry when done
+	defer func() {
+		c.pendingMu.Lock()
+		delete(c.pending, actionID)
+		c.pendingMu.Unlock()
+	}()
+
+	// Build command string with ActionID
 	var cmdStr strings.Builder
 	cmdStr.WriteString(fmt.Sprintf("Action: %s\r\n", cmd.Action))
-
+	cmdStr.WriteString(fmt.Sprintf("ActionID: %s\r\n", actionID))
 	for key, value := range cmd.Fields {
 		cmdStr.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
 	}
@@ -312,17 +344,33 @@ func (c *AMIClient) executeCommand(cmd AMICommand) {
 		return
 	}
 
-	// Read response
-	response, err := c.readResponse()
-	if err != nil {
+	// Wait for response (read by readLoop and dispatched to this channel)
+	select {
+	case response := <-respCh:
+		cmd.Response <- response
+	case <-time.After(30 * time.Second):
 		cmd.Response <- AMIResponse{
 			Success: false,
-			Error:   err.Error(),
+			Error:   "response timeout after 30 seconds",
 		}
-		return
+	case <-c.quit:
+		cmd.Response <- AMIResponse{
+			Success: false,
+			Error:   "client shutting down",
+		}
 	}
+}
 
-	cmd.Response <- response
+// handleConnection handles the AMI command execution
+func (c *AMIClient) handleConnection() {
+	for {
+		select {
+		case cmd := <-c.commands:
+			c.executeCommand(cmd)
+		case <-c.quit:
+			return
+		}
+	}
 }
 
 // GetAMIClient returns the global AMI client

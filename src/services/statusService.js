@@ -241,40 +241,38 @@ class StatusService {
     }, 1000);
 
     // Handle page visibility changes with debouncing
-    let visibilityTimeout;
-    document.addEventListener('visibilitychange', () => {
-      clearTimeout(visibilityTimeout);
-      visibilityTimeout = setTimeout(() => {
+    this._visibilityHandler = () => {
+      clearTimeout(this._visibilityTimeout);
+      this._visibilityTimeout = setTimeout(() => {
         this.handleVisibilityChange();
       }, 500);
-    });
+    };
+    document.addEventListener('visibilitychange', this._visibilityHandler);
 
     // Handle window focus/blur with debouncing
-    let focusTimeout;
-    window.addEventListener('focus', () => {
-      clearTimeout(focusTimeout);
-      focusTimeout = setTimeout(() => {
+    this._focusHandler = () => {
+      clearTimeout(this._focusTimeout);
+      this._focusTimeout = setTimeout(() => {
         this.setOnline();
       }, 500);
-    });
+    };
+    window.addEventListener('focus', this._focusHandler);
 
-    let blurTimeout;
-    window.addEventListener('blur', () => {
-      clearTimeout(blurTimeout);
-      blurTimeout = setTimeout(() => {
+    this._blurHandler = () => {
+      clearTimeout(this._blurTimeout);
+      this._blurTimeout = setTimeout(() => {
         this.setAway();
-      }, 1000); // Longer delay for blur to avoid rapid status changes
-    });
+      }, 1000);
+    };
+    window.addEventListener('blur', this._blurHandler);
 
     // Handle page unload
-    window.addEventListener('beforeunload', () => {
-      this.setOffline();
-    });
+    this._beforeUnloadHandler = () => { this.setOffline(); };
+    window.addEventListener('beforeunload', this._beforeUnloadHandler);
 
     // Handle browser close/refresh
-    window.addEventListener('unload', () => {
-      this.setOffline();
-    });
+    this._unloadHandler = () => { this.setOffline(); };
+    window.addEventListener('unload', this._unloadHandler);
 
     console.log('[StatusService] Status service initialized successfully');
   }
@@ -345,11 +343,16 @@ class StatusService {
     this.stopHeartbeat();
 
     // Remove event listeners
-    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-    window.removeEventListener('focus', this.setOnline);
-    window.removeEventListener('blur', this.setAway);
-    window.removeEventListener('beforeunload', this.setOffline);
-    window.removeEventListener('unload', this.setOffline);
+    if (this._visibilityHandler) document.removeEventListener('visibilitychange', this._visibilityHandler);
+    if (this._focusHandler) window.removeEventListener('focus', this._focusHandler);
+    if (this._blurHandler) window.removeEventListener('blur', this._blurHandler);
+    if (this._beforeUnloadHandler) window.removeEventListener('beforeunload', this._beforeUnloadHandler);
+    if (this._unloadHandler) window.removeEventListener('unload', this._unloadHandler);
+    this._visibilityHandler = null;
+    this._focusHandler = null;
+    this._blurHandler = null;
+    this._beforeUnloadHandler = null;
+    this._unloadHandler = null;
 
     console.log('[StatusService] Status service cleaned up');
   }
