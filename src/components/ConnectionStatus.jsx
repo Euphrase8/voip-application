@@ -1,242 +1,187 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import configService from '../services/configService';
-import ipConfigService from '../services/ipConfigService';
 
-// Material UI icons (professional, no emojis)
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
-import HourglassTopIcon from '@mui/icons-material/HourglassTop';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import CloseIcon from '@mui/icons-material/Close';
+const API_HOST = process.env.REACT_APP_API_URL || `http://${window.location.hostname}:8080`;
 
-const ConnectionStatus = ({ onConfigChange }) => {
+const StatusPill = ({ healthy, label, sub }) => (
+  <div className="flex items-center justify-between py-1.5">
+    <div className="flex items-center gap-2 min-w-0">
+      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${healthy === null ? 'bg-yellow-400' : healthy ? 'bg-green-500' : 'bg-red-500'}`} />
+      <span className="text-sm text-gray-700 dark:text-gray-200 truncate">{label}</span>
+    </div>
+    <span className={`text-xs flex-shrink-0 ml-2 ${healthy === null ? 'text-yellow-500' : healthy ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+      {sub}
+    </span>
+  </div>
+);
+
+const DetailRow = ({ label, value }) => (
+  <div className="flex justify-between items-start gap-2 py-0.5">
+    <span className="text-[11px] text-gray-500 dark:text-gray-400 flex-shrink-0">{label}</span>
+    <span className="text-[11px] text-gray-700 dark:text-gray-300 text-right break-all max-w-[60%]">{value}</span>
+  </div>
+);
+
+export default function ConnectionStatus() {
   const navigate = useNavigate();
-  const [status, setStatus] = useState({
-    backend: { healthy: false, checking: true },
-    asterisk: { healthy: false, checking: true },
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState({
+    backend: null,
+    asterisk: null,
     config: null,
+    apiUrl: API_HOST,
+    wsUrl: API_HOST.replace(/^http/, 'ws') + '/ws',
+    checking: false,
+    error: null,
+    lastCheck: null,
   });
-  const [showDetails, setShowDetails] = useState(false);
+  const intervalRef = useRef(null);
+
+  const check = async () => {
+    setState(prev => ({ ...prev, checking: true, error: null }));
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 5000);
+
+      const healthResp = await fetch(`${API_HOST}/health`, { signal: ctrl.signal });
+      clearTimeout(timeout);
+      const healthOk = healthResp.ok;
+
+      let asteriskHealthy = null;
+      let asteriskMsg = 'Unknown';
+      let configData = null;
+      let apiUrl = API_HOST;
+      let wsUrl = API_HOST.replace(/^http/, 'ws') + '/ws';
+
+      if (healthOk) {
+        try {
+          const configResp = await fetch(`${API_HOST}/config`, { signal: AbortSignal.timeout(3000) });
+          if (configResp.ok) {
+            const cfg = await configResp.json();
+            if (cfg.success && cfg.config) {
+              configData = cfg.config;
+              apiUrl = cfg.config.api_url || apiUrl;
+              wsUrl = cfg.config.ws_url || wsUrl;
+            }
+          }
+        } catch (e) {}
+
+        try {
+          const astResp = await fetch(`${API_HOST}/protected/test-asterisk`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+            signal: AbortSignal.timeout(3000),
+          });
+          if (astResp.ok) {
+            const ast = await astResp.json();
+            asteriskHealthy = ast.success || ast.connected || false;
+            asteriskMsg = asteriskHealthy ? 'Connected' : (ast.error || 'Not available');
+          } else {
+            asteriskHealthy = false;
+            asteriskMsg = 'Not accessible';
+          }
+        } catch (e) {
+          asteriskHealthy = null;
+          asteriskMsg = 'Not checked';
+        }
+      }
+
+      setState({
+        backend: healthOk,
+        asterisk: asteriskHealthy,
+        config: configData,
+        apiUrl,
+        wsUrl,
+        checking: false,
+        error: healthOk ? null : 'Backend unreachable',
+        lastCheck: new Date().toLocaleTimeString(),
+      });
+    } catch (err) {
+      setState(prev => ({
+        ...prev,
+        backend: false,
+        asterisk: null,
+        checking: false,
+        error: err.name === 'AbortError' ? 'Request timed out' : err.message,
+        lastCheck: new Date().toLocaleTimeString(),
+      }));
+    }
+  };
 
   useEffect(() => {
-    checkConnections();
-    const interval = setInterval(checkConnections, 30000); // Check every 30 seconds
-    return () => clearInterval(interval);
+    check();
+    intervalRef.current = setInterval(check, 15000);
+    return () => clearInterval(intervalRef.current);
   }, []);
 
-  const checkConnections = async () => {
-    try {
-      // Check backend health
-      const backendHealth = await configService.healthCheck();
-      
-      // Get current configuration
-      const config = configService.getConfig();
-      
-      // Check Asterisk connectivity (simplified)
-      const asteriskHealth = await checkAsteriskHealth(config);
-      
-      const newStatus = {
-        backend: backendHealth,
-        asterisk: asteriskHealth,
-        config: config,
-      };
-      
-      setStatus(newStatus);
-      
-      // Notify parent component of config changes
-      if (onConfigChange) {
-        onConfigChange(config);
-      }
-      
-    } catch (error) {
-      console.error('[ConnectionStatus] Health check failed:', error);
-    }
-  };
-
-  const checkAsteriskHealth = async (config) => {
-    // Simple check - in a real implementation, you might ping the Asterisk server
-    try {
-      if (config && config.asterisk && config.asterisk.host) {
-        return {
-          healthy: true,
-          status: 'configured',
-          host: config.asterisk.host,
-        };
-      }
-      return {
-        healthy: false,
-        error: 'Not configured',
-      };
-    } catch (error) {
-      return {
-        healthy: false,
-        error: error.message,
-      };
-    }
-  };
-
-  const getStatusColor = (healthy, checking) => {
-    if (checking) return 'text-yellow-500';
-    return healthy ? 'text-green-500' : 'text-red-500';
-  };
-
-  const StatusIcon = ({ healthy, checking }) => {
-    if (checking) return <HourglassTopIcon fontSize="inherit" />;
-    return healthy ? <CheckCircleIcon fontSize="inherit" /> : <ErrorIcon fontSize="inherit" />;
-  };
-
-  const reloadConfig = async () => {
-    setStatus(prev => ({
-      ...prev,
-      backend: { ...prev.backend, checking: true },
-      asterisk: { ...prev.asterisk, checking: true },
-    }));
-
-    await configService.reload();
-    await checkConnections();
-  };
-
-  const openIPConfig = () => {
-    navigate('/ip-config');
-  };
-
-  if (!showDetails) {
-    const overallHealthy = status.backend.healthy && status.asterisk.healthy;
-    const overallChecking = status.backend.checking || status.asterisk.checking;
-
-    return (
-      <div className="fixed bottom-4 right-4 z-50">
-        <button
-          onClick={() => setShowDetails(true)}
-          className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shadow-sm border ${
-            overallHealthy
-              ? 'bg-green-50 text-green-800 hover:bg-green-100 border-green-200'
-              : 'bg-red-50 text-red-800 hover:bg-red-100 border-red-200'
-          }`}
-          aria-label="Open connection status details"
-          title="Open connection status details"
-        >
-          <span className={`text-base ${getStatusColor(overallHealthy, overallChecking)}`}>
-            <StatusIcon healthy={overallHealthy} checking={overallChecking} />
-          </span>
-          <span>Connection Status</span>
-          <span className="text-gray-500">
-            <ExpandMoreIcon fontSize="inherit" />
-          </span>
-        </button>
-      </div>
-    );
-  }
+  const overall = state.backend !== false;
+  const badgeColor = state.backend === null
+    ? 'bg-yellow-500'
+    : state.backend
+      ? 'bg-green-500'
+      : 'bg-red-500';
+  const badgeLabel = state.backend === null
+    ? 'Checking...'
+    : state.backend
+      ? 'All Systems OK'
+      : 'Disconnected';
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 bg-white dark:bg-gray-800 rounded-lg shadow-lg border p-4 max-w-sm">
-      <div className="flex justify-between items-center mb-3">
-        <h3 className="font-semibold text-gray-900 dark:text-white">Connection Status</h3>
-        <button
-          onClick={() => setShowDetails(false)}
-          className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 inline-flex items-center"
-          aria-label="Close connection status"
-          title="Close"
-        >
-          <CloseIcon fontSize="small" />
-        </button>
-      </div>
+    <>
+      {/* Floating pill */}
+      <button
+        onClick={() => setOpen(!open)}
+        className="fixed bottom-4 right-4 z-50 flex items-center gap-2 px-3 py-2 bg-white dark:bg-gray-800 rounded-full shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-shadow"
+      >
+        <div className={`w-2.5 h-2.5 rounded-full ${badgeColor} ${state.backend === null ? 'animate-pulse' : ''}`} />
+        <span className="text-xs font-medium text-gray-700 dark:text-gray-200">{badgeLabel}</span>
+      </button>
 
-      <div className="space-y-2 text-sm">
-        {/* Backend Status */}
-        <div className="flex items-center justify-between">
-          <span className="text-gray-600 dark:text-gray-300">Backend:</span>
-          <span className={`${getStatusColor(status.backend.healthy, status.backend.checking)} inline-flex items-center gap-1.5`}>
-            <span className="text-sm">
-              <StatusIcon healthy={status.backend.healthy} checking={status.backend.checking} />
-            </span>
-            {status.backend.checking ? 'Checking...' : status.backend.healthy ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-
-        {/* Asterisk Status */}
-        <div className="flex items-center justify-between">
-          <span className="text-gray-600 dark:text-gray-300">Asterisk:</span>
-          <span className={`${getStatusColor(status.asterisk.healthy, status.asterisk.checking)} inline-flex items-center gap-1.5`}>
-            <span className="text-sm">
-              <StatusIcon healthy={status.asterisk.healthy} checking={status.asterisk.checking} />
-            </span>
-            {status.asterisk.checking ? 'Checking...' : status.asterisk.healthy ? 'Configured' : 'Not Available'}
-          </span>
-        </div>
-
-        {/* Configuration Source */}
-        {status.config && (
-          <div className="flex items-center justify-between">
-            <span className="text-gray-600 dark:text-gray-300">Config:</span>
-            <span className="text-blue-600 dark:text-blue-400 text-xs">
-              {status.config._source || 'Unknown'}
-            </span>
+      {/* Detail Panel */}
+      {open && (
+        <div className="fixed bottom-16 right-4 z-50 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+            <h3 className="font-semibold text-sm text-gray-900 dark:text-white">Connection Status</h3>
+            <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg leading-none">&times;</button>
           </div>
-        )}
 
-        {/* IP Configuration Info */}
-        {ipConfigService.isConfigured() && (
-          <div className="flex items-center justify-between">
-            <span className="text-gray-600 dark:text-gray-300">IPs:</span>
-            <span className="text-green-600 dark:text-green-400 text-xs">
-              Configured
-            </span>
+          <div className="px-4 py-3 space-y-1">
+            <StatusPill healthy={state.backend} label="Backend" sub={state.backend === null ? 'Checking...' : state.backend ? 'Connected' : 'Disconnected'} />
+            <StatusPill healthy={state.asterisk} label="Asterisk" sub={state.asterisk === null ? 'Checking...' : state.asterisk ? 'Connected' : 'Not available'} />
+            <StatusPill healthy={state.config ? true : state.backend === false ? false : null} label="Configuration" sub={state.config ? 'Loaded' : state.backend === false ? 'Unavailable' : 'Loading...'} />
+            <StatusPill healthy={state.backend ? true : null} label="WebSocket" sub={state.backend ? 'Ready' : 'N/A'} />
           </div>
-        )}
-      </div>
 
-      {/* Configuration Details */}
-      {status.config && (
-        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
-          <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
-            <div>API: {status.config.api_url}</div>
-            <div>WS: {status.config.ws_url}</div>
-            {status.config.asterisk && (
-              <div>Asterisk: {status.config.asterisk.host}</div>
-            )}
+          {/* Config Details */}
+          {state.config && (
+            <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-850">
+              <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Configuration</p>
+              <DetailRow label="API URL" value={state.apiUrl} />
+              <DetailRow label="WS URL" value={state.wsUrl} />
+              {state.config.asterisk && (
+                <DetailRow label="Asterisk Host" value={state.config.asterisk.host || '-'} />
+              )}
+              <DetailRow label="Status" value={state.config.environment || '-'} />
+            </div>
+          )}
+
+          {/* Error */}
+          {state.error && (
+            <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700">
+              <p className="text-xs text-red-500">{state.error}</p>
+            </div>
+          )}
+
+          {/* Time */}
+          <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
+            {state.lastCheck && <span className="text-[10px] text-gray-400">Last check: {state.lastCheck}</span>}
+            <div className="flex gap-1">
+              <button onClick={check} className="text-[11px] px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors">Refresh</button>
+              <button onClick={() => navigate('/ip-config')} className="text-[11px] px-2 py-1 bg-purple-500 text-white rounded hover:bg-purple-600 transition-colors">IP Config</button>
+            </div>
           </div>
         </div>
       )}
-
-      {/* Actions */}
-      <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600 space-y-2">
-        <div className="flex space-x-2">
-          <button
-            onClick={reloadConfig}
-            className="flex-1 px-3 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 transition-colors"
-          >
-            Reload Config
-          </button>
-          <button
-            onClick={checkConnections}
-            className="flex-1 px-3 py-1 bg-gray-500 text-white text-xs rounded hover:bg-gray-600 transition-colors"
-          >
-            Check Now
-          </button>
-        </div>
-        <button
-          onClick={openIPConfig}
-          className="w-full px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition-colors"
-        >
-          Configure IP Addresses
-        </button>
-      </div>
-
-      {/* Error Details */}
-      {(!status.backend.healthy || !status.asterisk.healthy) && (
-        <div className="mt-2 p-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600 dark:text-red-400">
-          {!status.backend.healthy && (
-            <div>Backend: {status.backend.error}</div>
-          )}
-          {!status.asterisk.healthy && (
-            <div>Asterisk: {status.asterisk.error}</div>
-          )}
-        </div>
-      )}
-    </div>
+    </>
   );
-};
-
-export default ConnectionStatus;
+}

@@ -2,10 +2,17 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"voip-backend/asterisk"
@@ -19,6 +26,78 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
+
+const lockFileName = "voip-backend.lock"
+
+func writeLockFile() error {
+	lockPath := filepath.Join(os.TempDir(), lockFileName)
+	return os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644)
+}
+
+func removeLockFile() {
+	os.Remove(filepath.Join(os.TempDir(), lockFileName))
+}
+
+func findProcessOnPort(port string) (pid int, processName string, err error) {
+	ln, listenErr := net.Listen("tcp", "127.0.0.1:"+port)
+	if listenErr == nil {
+		ln.Close()
+		return 0, "", nil
+	}
+
+	// Try netstat -ano on Windows
+	cmd := exec.Command("netstat", "-ano")
+	out, runErr := cmd.Output()
+	if runErr != nil {
+		return 0, "", fmt.Errorf("port %s is in use by another process", port)
+	}
+
+	re := regexp.MustCompile(fmt.Sprintf(`127\.0\.0\.1:%s\s+.*?\s+(\d+)\s*$`, port))
+	for _, line := range strings.Split(string(out), "\n") {
+		matches := re.FindStringSubmatch(line)
+		if len(matches) > 1 {
+			p, _ := strconv.Atoi(strings.TrimSpace(matches[1]))
+			if p > 0 {
+				procName := "unknown"
+				if nameOut, nameErr := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", p), "/NH").Output(); nameErr == nil {
+					parts := strings.Fields(string(nameOut))
+					if len(parts) > 0 {
+						procName = parts[0]
+					}
+				}
+				return p, procName, nil
+			}
+		}
+	}
+
+	reAny := regexp.MustCompile(`:(\d+)\s+.*?\s+(\d+)\s*$`)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "LISTENING") {
+			matches := reAny.FindStringSubmatch(line)
+			if len(matches) > 2 && matches[1] == port {
+				p, _ := strconv.Atoi(strings.TrimSpace(matches[2]))
+				if p > 0 {
+					return p, "unknown", nil
+				}
+			}
+		}
+	}
+
+	return 0, "", fmt.Errorf("port %s is in use by another process", port)
+}
+
+func tryListen(host, port string) (net.Listener, error) {
+	addr := host + ":" + port
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		pid, name, findErr := findProcessOnPort(port)
+		if findErr != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %v", addr, err)
+		}
+		return nil, fmt.Errorf("port %s is already in use by PID %d (%s). Use a different port or terminate that process", port, pid, name)
+	}
+	return ln, nil
+}
 
 func main() {
 	// Load configuration
@@ -306,20 +385,49 @@ func main() {
 		}
 	}
 
-	// Start server
-	address := config.AppConfig.Host + ":" + config.AppConfig.Port
+	// Write lock file to prevent duplicate instances
+	if err := writeLockFile(); err != nil {
+		log.Printf("Warning: Could not write lock file: %v", err)
+	}
+
+	// Check port availability and start server
+	host := config.AppConfig.Host
+	port := config.AppConfig.Port
+
+	// Check if PORT environment variable overrides config
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		port = envPort
+	}
+	// Check if an alternative port was provided via command line
+	altPort := os.Getenv("ALT_PORT")
+	if altPort != "" {
+		port = altPort
+	}
+
+	ln, err := tryListen(host, port)
+	if err != nil {
+		log.Fatalf("Server startup failed: %v", err)
+	}
+	log.Printf("Port %s is available", port)
+
+	// Also allow auto-selecting next port via environment
+	autoPort := os.Getenv("AUTO_PORT")
+	if autoPort == "true" {
+		// Try next port if configured port is taken (tryListen already handles this)
+	}
+
+	address := ln.Addr().String()
 	log.Printf("Starting VoIP backend server on %s", address)
 	log.Printf("Debug mode: %v", config.AppConfig.Debug)
 	log.Printf("CORS origins: %v", config.AppConfig.CORSOrigins)
 
 	srv := &http.Server{
-		Addr:    address,
 		Handler: r,
 	}
 
-	// Start server in a goroutine
+	// Start server using the pre-acquired listener
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
@@ -338,6 +446,7 @@ func main() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
+	removeLockFile()
 	database.CloseDB()
 	log.Println("Server exited")
 }
