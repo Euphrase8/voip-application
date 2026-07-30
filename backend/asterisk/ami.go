@@ -61,7 +61,9 @@ var amiMutex sync.Mutex
 // Track whether AMI has ever connected successfully
 var amiEverConnected atomic.Bool
 
-// InitAMI initializes the AMI connection with retry logic
+// InitAMI initializes the AMI connection with retry logic.
+// If the initial connection fails, it attempts to auto-start Asterisk
+// via WSL/SSH before entering the background reconnection loop.
 func InitAMI() error {
 	amiMutex.Lock()
 	defer amiMutex.Unlock()
@@ -71,13 +73,30 @@ func InitAMI() error {
 	client, err := NewAMIClient()
 	if err != nil {
 		log.Printf("Failed to create AMI client: %v", err)
-		log.Printf("AMI connection will be retried in background every 30 seconds")
-		log.Printf("VoIP functionality will be limited until Asterisk connection is established")
 
-		// Start background reconnection loop
+		// Try to start Asterisk automatically
+		log.Println("Attempting to auto-start Asterisk...")
+		if startErr := TryStartAsterisk(); startErr != nil {
+			log.Printf("Auto-start failed: %v", startErr)
+		} else {
+			log.Println("Asterisk started, retrying AMI connection in 3 seconds...")
+			time.Sleep(3 * time.Second)
+
+			client2, err2 := NewAMIClient()
+			if err2 == nil {
+				amiClient = client2
+				amiEverConnected.Store(true)
+				go amiClient.startHealthMonitoring()
+				log.Println("AMI connected successfully after auto-starting Asterisk")
+				return nil
+			}
+			log.Printf("AMI still unreachable after auto-start: %v", err2)
+		}
+
+		log.Println("AMI connection will be retried in background every 30 seconds")
+		log.Println("VoIP functionality will be limited until Asterisk connection is established")
+
 		go startReconnectionLoop()
-
-		// Don't return error - let the application start without AMI
 		return nil
 	}
 
@@ -89,7 +108,8 @@ func InitAMI() error {
 	return nil
 }
 
-// startReconnectionLoop continuously tries to reconnect with exponential backoff
+// startReconnectionLoop continuously tries to reconnect with exponential backoff.
+// On every 5th attempt it also tries to auto-start Asterisk (in case it crashed).
 func startReconnectionLoop() {
 	attempt := 0
 	for {
@@ -114,6 +134,18 @@ func startReconnectionLoop() {
 		}
 
 		log.Printf("[AMI] Reconnect attempt %d...", attempt)
+
+		// Every 5 attempts, try to restart Asterisk (may have crashed)
+		if attempt%5 == 0 {
+			log.Println("[AMI] Attempting to restart Asterisk...")
+			if startErr := TryStartAsterisk(); startErr != nil {
+				log.Printf("[AMI] Restart failed: %v", startErr)
+			} else {
+				log.Println("[AMI] Asterisk restarted, will retry AMI connection")
+				time.Sleep(3 * time.Second)
+			}
+		}
+
 		if err := reconnectAMI(); err != nil {
 			if attempt <= 5 || attempt%5 == 0 {
 				log.Printf("[AMI] Reconnection failed (attempt %d): %v", attempt, err)

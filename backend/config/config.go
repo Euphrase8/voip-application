@@ -29,6 +29,10 @@ type Config struct {
 	AsteriskAMIPort     string
 	AsteriskAMIUsername string
 	AsteriskAMISecret   string
+	AsteriskWSLDistro   string
+	AsteriskSSHUser     string
+	AsteriskSSHPassword string
+	AsteriskSSHPort     string
 
 	// SIP Configuration
 	SIPDomain string
@@ -68,6 +72,10 @@ func LoadConfig() {
 		AsteriskAMIPort:     getEnv("ASTERISK_AMI_PORT", "5038"),
 		AsteriskAMIUsername: getEnv("ASTERISK_AMI_USERNAME", "admin"),
 		AsteriskAMISecret:   getEnv("ASTERISK_AMI_SECRET", "amp111"),
+		AsteriskWSLDistro:   getEnv("ASTERISK_WSL_DISTRO", ""),
+		AsteriskSSHUser:     getEnv("ASTERISK_SSH_USER", ""),
+		AsteriskSSHPassword: getEnv("ASTERISK_SSH_PASSWORD", ""),
+		AsteriskSSHPort:     getEnv("ASTERISK_SSH_PORT", "22"),
 		SIPDomain:           getEnv("SIP_DOMAIN", "asterisk.local"),
 		SIPPort:             getEnv("SIP_PORT", "8088"),
 		Debug:               getEnvAsBool("DEBUG", true),
