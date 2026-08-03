@@ -10,7 +10,6 @@ import {
   FiDownload as Download,
   FiRefreshCw as RefreshCw,
   FiCheckCircle as CheckCircle,
-  FiXCircle as XCircle,
   FiClock as Clock,
   FiTrendingUp as TrendingUp,
   FiShield as Shield,
@@ -18,7 +17,11 @@ import {
   FiWifi as Wifi,
   FiBell as Bell,
   FiSave as Save,
-  FiUpload as Upload
+  FiUpload as Upload,
+  FiEdit2 as Edit,
+  FiUserCheck as UserCheck,
+  FiUserX as UserX,
+  FiEye as Eye
 } from 'react-icons/fi';
 import { useTheme } from '../contexts/ThemeContext';
 import { cn, formatDate, formatDuration, getStatusColor } from '../utils/ui';
@@ -32,6 +35,8 @@ import AdminCallPanel from '../components/AdminCallPanel';
 import NotificationsPage from './NotificationsPage';
 import ConfirmationModal from '../components/ConfirmationModal';
 import CreateUserModal from '../components/CreateUserModal';
+import EditUserModal from '../components/EditUserModal';
+import ViewUserModal from '../components/ViewUserModal';
 
 import EnhancedSystemTab from '../components/EnhancedSystemTab';
 import AsteriskDiagnostics from '../components/AsteriskDiagnostics';
@@ -125,21 +130,33 @@ const UserStatusChart = ({ stats, darkMode }) => {
   );
 };
 
-const CallActivityChart = ({ stats, darkMode }) => {
-  // Generate mock hourly data for the last 24 hours
+const CallActivityChart = ({ stats, darkMode, callLogs = [] }) => {
+  // Bucket real call logs into hourly slots for the last 24 hours
   const generateHourlyData = () => {
-    const hours = [];
     const now = new Date();
+    const slots = [];
     for (let i = 23; i >= 0; i--) {
       const hour = new Date(now.getTime() - i * 60 * 60 * 1000);
-      const calls = Math.floor(Math.random() * (stats.calls_today / 24 + 5));
-      hours.push({
-        hour: hour.getHours(),
-        calls: calls,
-        label: hour.getHours().toString().padStart(2, '0') + ':00'
+      slots.push({
+        key: hour.getHours(),
+        start: hour.getTime(),
+        end: hour.getTime() + 60 * 60 * 1000,
+        calls: 0
       });
     }
-    return hours;
+
+    callLogs.forEach((log) => {
+      const created = new Date(log.created_at).getTime();
+      if (isNaN(created)) return;
+      const slot = slots.find(s => created >= s.start && created < s.end);
+      if (slot) slot.calls += 1;
+    });
+
+    return slots.map((slot) => ({
+      hour: slot.key,
+      calls: slot.calls,
+      label: slot.key.toString().padStart(2, '0') + ':00'
+    }));
   };
 
   const hourlyData = generateHourlyData();
@@ -172,7 +189,7 @@ const CallActivityChart = ({ stats, darkMode }) => {
           "text-sm",
           darkMode ? "text-secondary-400" : "text-secondary-600"
         )}>
-          Last 12 hours
+          Last 12 hours ({callLogs.length} total logs)
         </span>
       </div>
     </div>
@@ -242,37 +259,34 @@ const SystemHealthChart = ({ stats, darkMode }) => {
   );
 };
 
-const PerformanceMetrics = ({ stats, darkMode }) => {
-  const metrics = [
+const PerformanceMetrics = ({ metrics, darkMode }) => {
+  const callSuccessRate = metrics?.call_success_rate;
+  const avgCallDuration = metrics?.avg_call_duration || '0:00';
+  const totalCallLogs = metrics?.total_call_logs ?? 0;
+  const activeCalls = metrics?.active_calls ?? 0;
+
+  const metricItems = [
     {
       label: 'Call Success Rate',
-      value: '98.5%',
-      trend: '+2.1%',
-      trendUp: true,
+      value: typeof callSuccessRate === 'number' ? `${callSuccessRate.toFixed(1)}%` : '--',
       icon: CheckCircle,
       color: 'text-success-600'
     },
     {
       label: 'Avg Call Duration',
-      value: '4:32',
-      trend: '+0:15',
-      trendUp: true,
+      value: avgCallDuration,
       icon: Clock,
       color: 'text-primary-600'
     },
     {
-      label: 'System Uptime',
-      value: '99.9%',
-      trend: 'Stable',
-      trendUp: true,
-      icon: Shield,
-      color: 'text-success-600'
+      label: 'Total Calls',
+      value: totalCallLogs,
+      icon: Phone,
+      color: 'text-primary-600'
     },
     {
-      label: 'Response Time',
-      value: '45ms',
-      trend: '-5ms',
-      trendUp: true,
+      label: 'Active Calls',
+      value: activeCalls,
       icon: TrendingUp,
       color: 'text-success-600'
     }
@@ -280,7 +294,7 @@ const PerformanceMetrics = ({ stats, darkMode }) => {
 
   return (
     <div className="grid grid-cols-2 gap-4">
-      {metrics.map((metric, index) => (
+      {metricItems.map((metric, index) => (
         <div key={index} className={cn(
           "p-3 rounded-lg border",
           darkMode
@@ -296,69 +310,32 @@ const PerformanceMetrics = ({ stats, darkMode }) => {
               {metric.label}
             </span>
           </div>
-          <div className="flex items-center justify-between">
-            <span className={cn(
-              "text-lg font-bold",
-              darkMode ? "text-white" : "text-secondary-900"
-            )}>
-              {metric.value}
-            </span>
-            <span className={cn(
-              "text-xs",
-              metric.trendUp ? "text-success-600" : "text-danger-600"
-            )}>
-              {metric.trend}
-            </span>
-          </div>
+          <span className={cn(
+            "text-lg font-bold",
+            darkMode ? "text-white" : "text-secondary-900"
+          )}>
+            {metric.value}
+          </span>
         </div>
       ))}
     </div>
   );
 };
 
-const RecentActivityFeed = ({ darkMode }) => {
-  const activities = [
-    {
-      id: 1,
-      type: 'call',
-      message: 'Call completed: 1001 → 1002',
-      time: '2 min ago',
-      icon: Phone,
-      color: 'text-success-600'
-    },
-    {
-      id: 2,
-      type: 'user',
-      message: 'User user3 logged in',
-      time: '5 min ago',
-      icon: Users,
-      color: 'text-primary-600'
-    },
-    {
-      id: 3,
-      type: 'call',
-      message: 'Missed call: 1003 → 1001',
-      time: '8 min ago',
-      icon: Phone,
-      color: 'text-warning-600'
-    },
-    {
-      id: 4,
-      type: 'system',
-      message: 'System backup completed',
-      time: '15 min ago',
-      icon: Database,
-      color: 'text-success-600'
-    },
-    {
-      id: 5,
-      type: 'user',
-      message: 'User user2 logged out',
-      time: '22 min ago',
-      icon: Users,
-      color: 'text-secondary-600'
-    }
-  ];
+const RecentActivityFeed = ({ darkMode, activities = [] }) => {
+  if (activities.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-center">
+        <Activity className="w-8 h-8 mb-2 text-secondary-400" />
+        <p className={cn(
+          'text-sm',
+          darkMode ? 'text-secondary-400' : 'text-secondary-600'
+        )}>
+          No recent activity
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3 max-h-64 overflow-y-auto">
@@ -532,6 +509,13 @@ const AdminDashboard = ({ user, onLogout }) => {
   const [users, setUsers] = useState([]);
   const [callLogs, setCallLogs] = useState([]);
   const [systemStatus, setSystemStatus] = useState(null);
+  const [realtimeMetrics, setRealtimeMetrics] = useState({
+    call_success_rate: null,
+    avg_call_duration: '0:00',
+    total_call_logs: 0,
+    successful_calls: 0,
+    active_calls: 0
+  });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showAdminCall, setShowAdminCall] = useState(false);
@@ -539,6 +523,10 @@ const AdminDashboard = ({ user, onLogout }) => {
   const [deleteLogConfirmation, setDeleteLogConfirmation] = useState({ show: false, log: null, loading: false });
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
   const [showAsteriskDiagnostics, setShowAsteriskDiagnostics] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [viewUser, setViewUser] = useState(null);
+  const [deleteSelectedConfirmation, setDeleteSelectedConfirmation] = useState({ show: false, ids: [], loading: false });
+  const [deleteAllConfirmation, setDeleteAllConfirmation] = useState({ show: false, loading: false });
 
   // Asterisk Diagnostics State (currently unused but kept for future features)
   // const [diagnosticsRunning, setDiagnosticsRunning] = useState(false);
@@ -546,26 +534,26 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   // Backup and System Health State
   const [backupStatus, setBackupStatus] = useState({
-    lastBackup: '2024-01-15 10:30:00',
-    backupSize: '2.4 MB',
-    status: 'completed',
-    nextBackup: '2024-01-16 02:00:00',
-    totalBackups: 15,
-    availableSpace: '8.2 GB',
+    lastBackup: null,
+    backupSize: null,
+    status: null,
+    nextBackup: null,
+    totalBackups: 0,
+    availableSpace: null,
     backupProgress: 0,
     isCreating: false,
     isRestoring: false
   });
 
   const [systemHealth, setSystemHealth] = useState({
-    asteriskStatus: 'online',
-    databaseStatus: 'online',
-    backendStatus: 'online',
-    diskUsage: 45,
-    memoryUsage: 62,
-    cpuUsage: 28,
-    uptime: '15 days, 8 hours',
-    lastCheck: new Date().toLocaleString()
+    asteriskStatus: 'checking',
+    databaseStatus: 'checking',
+    backendStatus: 'checking',
+    diskUsage: 0,
+    memoryUsage: 0,
+    cpuUsage: 0,
+    uptime: null,
+    lastCheck: null
   });
 
   const tabs = [
@@ -625,9 +613,11 @@ const AdminDashboard = ({ user, onLogout }) => {
       setRefreshing(true);
       await Promise.all([
         loadStats(),
+        loadRealtimeMetrics(),
         loadUsers(),
         loadCallLogs(),
         loadSystemStatus(),
+        loadBackupStatus(),
       ]);
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
@@ -649,6 +639,47 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
+  const loadRealtimeMetrics = async () => {
+    try {
+      const data = await adminService.getRealTimeMetrics();
+      if (data.success && data.metrics) {
+        setRealtimeMetrics(data.metrics);
+      }
+    } catch (error) {
+      console.error('Failed to load real-time metrics:', error);
+    }
+  };
+
+  const loadBackupStatus = async () => {
+    try {
+      const backups = await backupService.listBackups();
+      if (!backups || backups.length === 0) {
+        setBackupStatus(prev => ({
+          ...prev,
+          status: 'none',
+          totalBackups: 0,
+          lastBackup: null,
+          backupSize: null,
+          nextBackup: null,
+          availableSpace: null
+        }));
+        return;
+      }
+      const latest = backups[0];
+      setBackupStatus(prev => ({
+        ...prev,
+        status: latest.status || 'completed',
+        totalBackups: backups.length,
+        lastBackup: latest.createdAt ? latest.createdAt.toLocaleString() : null,
+        backupSize: latest.formattedSize || null,
+        nextBackup: null,
+        availableSpace: null
+      }));
+    } catch (error) {
+      console.error('Failed to load backup status:', error);
+    }
+  };
+
   const loadUsers = async () => {
     try {
       const data = await adminService.getUsers();
@@ -662,13 +693,7 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   const loadCallLogs = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${CONFIG.API_URL}/protected/call/logs`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      const data = await response.json();
+      const data = await adminService.getAdminCallLogs(200);
       if (data.success) {
         setCallLogs(data.call_logs || []);
       }
@@ -819,20 +844,22 @@ const AdminDashboard = ({ user, onLogout }) => {
           }));
 
           if (status.status === 'completed') {
-            const newBackupSize = '2.4 MB'; // Will be updated when we get real size from backend
             setBackupStatus(prev => ({
               ...prev,
               lastBackup: new Date().toLocaleString(),
               status: 'completed',
-              backupSize: newBackupSize,
+              backupSize: prev.backupSize,
               totalBackups: prev.totalBackups + 1,
               isCreating: false,
               backupProgress: 100,
-              nextBackup: new Date(Date.now() + 24 * 60 * 60 * 1000).toLocaleString()
+              nextBackup: null
             }));
 
             toast.dismiss();
             toast.success('Backup created successfully');
+
+            // Reload real backup status from the backend
+            loadBackupStatus();
 
             // Update system health
             setSystemHealth(prev => ({
@@ -905,8 +932,7 @@ const AdminDashboard = ({ user, onLogout }) => {
               // Update system health after restore
               setSystemHealth(prev => ({
                 ...prev,
-                lastCheck: new Date().toLocaleString(),
-                uptime: '0 minutes' // System would restart after restore
+                lastCheck: new Date().toLocaleString()
               }));
 
               toast.dismiss();
@@ -1050,6 +1076,91 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
+  const handleUpdateUser = async (userId, userData) => {
+    try {
+      const response = await adminService.updateUser(userId, userData);
+      if (response.success) {
+        toast.success('User updated successfully');
+        setEditUser(null);
+        loadUsers();
+        loadStats();
+      } else {
+        throw new Error(response.error || 'Failed to update user');
+      }
+    } catch (error) {
+      console.error('Error updating user:', error);
+      throw new Error(error.message || 'Failed to update user');
+    }
+  };
+
+  const handleToggleUserEnabled = async (user) => {
+    const action = user.enabled ? 'disable' : 'enable';
+    try {
+      const response = await adminService.updateUser(user.id, { enabled: !user.enabled });
+      if (response.success) {
+        toast.success(`User "${user.username}" ${action}d successfully`);
+        loadUsers();
+        loadStats();
+      } else {
+        toast.error(response.error || `Failed to ${action} user`);
+      }
+    } catch (error) {
+      console.error(`Error ${action} user:`, error);
+      toast.error(error.message || `Failed to ${action} user`);
+    }
+  };
+
+  const confirmDeleteSelectedUsers = async () => {
+    const ids = deleteSelectedConfirmation.ids;
+    if (!ids.length) return;
+
+    setDeleteSelectedConfirmation(prev => ({ ...prev, loading: true }));
+
+    try {
+      let deleted = 0;
+      let failed = 0;
+      for (const id of ids) {
+        const result = await adminService.deleteUser(id);
+        if (result.success) {
+          deleted++;
+        } else {
+          failed++;
+        }
+      }
+
+      setDeleteSelectedConfirmation({ show: false, ids: [], loading: false });
+      toast.success(`Deleted ${deleted} user(s)${failed > 0 ? `, ${failed} failed` : ''}`);
+      loadUsers();
+      loadStats();
+    } catch (error) {
+      console.error('Failed to delete selected users:', error);
+      toast.error('Failed to delete selected users');
+      setDeleteSelectedConfirmation(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const confirmDeleteAllUsers = async () => {
+    setDeleteAllConfirmation(prev => ({ ...prev, loading: true }));
+
+    try {
+      const result = await adminService.deleteAllUsers();
+
+      if (result.success) {
+        toast.success(result.message || 'All non-admin users deleted');
+        loadUsers();
+        loadStats();
+        loadCallLogs();
+      } else {
+        toast.error(result.error || 'Failed to delete all users');
+      }
+      setDeleteAllConfirmation({ show: false, loading: false });
+    } catch (error) {
+      console.error('Failed to delete all users:', error);
+      toast.error('Failed to delete all users');
+      setDeleteAllConfirmation({ show: false, loading: false });
+    }
+  };
+
 
 
 
@@ -1187,6 +1298,10 @@ const AdminDashboard = ({ user, onLogout }) => {
               darkMode={darkMode}
               loadDashboardData={loadDashboardData}
               refreshing={refreshing}
+              onCreateUser={() => setShowCreateUserModal(true)}
+              callLogs={callLogs}
+              users={users}
+              realtimeMetrics={realtimeMetrics}
             />
           </div>
         )}
@@ -1196,6 +1311,11 @@ const AdminDashboard = ({ user, onLogout }) => {
               users={users}
               onDeleteUser={showDeleteConfirmation}
               onCreateUser={() => setShowCreateUserModal(true)}
+              onEditUser={(user) => setEditUser(user)}
+              onViewUser={(user) => setViewUser(user)}
+              onToggleUserEnabled={handleToggleUserEnabled}
+              onDeleteSelected={(ids) => setDeleteSelectedConfirmation({ show: true, ids, loading: false })}
+              onDeleteAllUsers={() => setDeleteAllConfirmation({ show: true, loading: false })}
               darkMode={darkMode}
             />
           </div>
@@ -1283,6 +1403,59 @@ const AdminDashboard = ({ user, onLogout }) => {
         darkMode={darkMode}
       />
 
+      {/* Edit User Modal */}
+      <EditUserModal
+        isOpen={editUser !== null}
+        user={editUser}
+        onClose={() => setEditUser(null)}
+        onUpdateUser={handleUpdateUser}
+        darkMode={darkMode}
+      />
+
+      {/* View User Modal */}
+      <ViewUserModal
+        isOpen={viewUser !== null}
+        user={viewUser}
+        onClose={() => setViewUser(null)}
+        onEdit={(user) => {
+          setViewUser(null);
+          setEditUser(user);
+        }}
+        onDelete={(user) => {
+          setViewUser(null);
+          showDeleteConfirmation(user);
+        }}
+        darkMode={darkMode}
+      />
+
+      {/* Delete Selected Users Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={deleteSelectedConfirmation.show}
+        onClose={() => setDeleteSelectedConfirmation(prev => ({ ...prev, show: false, ids: [] }))}
+        onConfirm={confirmDeleteSelectedUsers}
+        title="Delete Selected Users"
+        message={`Are you sure you want to delete ${deleteSelectedConfirmation.ids.length} selected user(s)? This will permanently remove their data including call logs, messages, and voicemails.`}
+        confirmText="Delete Users"
+        cancelText="Cancel"
+        type="danger"
+        loading={deleteSelectedConfirmation.loading}
+        darkMode={darkMode}
+      />
+
+      {/* Delete All Users Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={deleteAllConfirmation.show}
+        onClose={() => setDeleteAllConfirmation(prev => ({ ...prev, show: false }))}
+        onConfirm={confirmDeleteAllUsers}
+        title="Delete All Users"
+        message="WARNING: This will permanently delete ALL non-admin users and all of their data (call logs, messages, conversations, and voicemails). Admin accounts will be preserved. This action cannot be undone. Are you sure you want to continue?"
+        confirmText="Delete All Users"
+        cancelText="Cancel"
+        type="danger"
+        loading={deleteAllConfirmation.loading}
+        darkMode={darkMode}
+      />
+
       {/* Asterisk Diagnostics Modal */}
       {showAsteriskDiagnostics && (
         <AsteriskDiagnostics
@@ -1295,7 +1468,7 @@ const AdminDashboard = ({ user, onLogout }) => {
 };
 
 // Overview Tab Component
-const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing }) => {
+const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing, onCreateUser, callLogs = [], users = [], realtimeMetrics = {} }) => {
   if (!stats) {
     return (
       <div className="text-center py-8">
@@ -1309,6 +1482,52 @@ const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing }) => {
       </div>
     );
   }
+
+  const buildActivityFeed = () => {
+    const activities = [];
+    let id = 1;
+
+    // Recent call activity (most recent first)
+    callLogs.slice(0, 5).forEach((log) => {
+      const caller = log.caller?.username || log.caller?.extension || 'Unknown';
+      const callee = log.callee?.username || log.callee?.extension || 'Unknown';
+      const timeAgo = formatTimeAgo(log.created_at);
+      activities.push({
+        id: id++,
+        type: 'call',
+        message: `${log.status === 'missed' || log.status === 'failed' ? log.status.charAt(0).toUpperCase() + log.status.slice(1) + ' call' : 'Call'} : ${caller} → ${callee}`,
+        time: timeAgo,
+        icon: Phone,
+        color: log.status === 'missed' || log.status === 'failed' ? 'text-warning-600' : 'text-success-600'
+      });
+    });
+
+    // Recent user logins
+    users.slice().sort((a, b) => new Date(b.last_login || 0) - new Date(a.last_login || 0)).slice(0, 4).forEach((u) => {
+      if (!u.last_login) return;
+      activities.push({
+        id: id++,
+        type: 'user',
+        message: `${u.username} logged in`,
+        time: formatTimeAgo(u.last_login),
+        icon: Users,
+        color: 'text-primary-600'
+      });
+    });
+
+    return activities.slice(0, 8);
+  };
+
+  const formatTimeAgo = (dateValue) => {
+    if (!dateValue) return 'recently';
+    const date = new Date(dateValue);
+    if (isNaN(date.getTime())) return 'recently';
+    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} hr ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  };
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -1414,7 +1633,7 @@ const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing }) => {
           )}>
             Call Activity (24h)
           </h3>
-          <CallActivityChart stats={stats} darkMode={darkMode} />
+          <CallActivityChart stats={stats} darkMode={darkMode} callLogs={callLogs} />
         </motion.div>
 
         {/* System Health */}
@@ -1459,7 +1678,7 @@ const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing }) => {
           )}>
             Performance Metrics
           </h3>
-          <PerformanceMetrics stats={stats} darkMode={darkMode} />
+          <PerformanceMetrics metrics={realtimeMetrics} darkMode={darkMode} />
         </motion.div>
 
         {/* Recent Activity */}
@@ -1480,7 +1699,7 @@ const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing }) => {
           )}>
             Recent Activity
           </h3>
-          <RecentActivityFeed darkMode={darkMode} />
+          <RecentActivityFeed darkMode={darkMode} activities={buildActivityFeed()} />
         </motion.div>
 
         {/* Quick Actions */}
@@ -1503,7 +1722,7 @@ const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing }) => {
           </h3>
           <div className="space-y-3">
             <button
-              onClick={() => toast.success('User management feature coming soon')}
+              onClick={onCreateUser}
               className="w-full btn-primary flex items-center justify-center space-x-2"
             >
               <UserPlus className="w-4 h-4" />
@@ -1544,9 +1763,26 @@ const OverviewTab = ({ stats, darkMode, loadDashboardData, refreshing }) => {
 };
 
 // Users Tab Component
-const UsersTab = ({ users, onDeleteUser, darkMode, onCreateUser }) => {
+const UsersTab = ({ users, onDeleteUser, darkMode, onCreateUser, onEditUser, onViewUser, onToggleUserEnabled, onDeleteSelected, onDeleteAllUsers }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('all');
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  const formatUserDate = (value) => {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return '—';
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  const selectableUsers = users.filter(user => user.role !== 'admin');
 
   const filteredUsers = users.filter(user => {
     const matchesSearch = user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1555,6 +1791,23 @@ const UsersTab = ({ users, onDeleteUser, darkMode, onCreateUser }) => {
     const matchesRole = filterRole === 'all' || user.role === filterRole;
     return matchesSearch && matchesRole;
   });
+
+  const filteredSelectableIds = filteredUsers.filter(u => u.role !== 'admin').map(u => u.id);
+  const allFilteredSelected = filteredSelectableIds.length > 0 && filteredSelectableIds.every(id => selectedIds.includes(id));
+
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) {
+      setSelectedIds(prev => prev.filter(id => !filteredSelectableIds.includes(id)));
+    } else {
+      setSelectedIds(prev => [...new Set([...prev, ...filteredSelectableIds])]);
+    }
+  };
+
+  const clearSelection = () => setSelectedIds([]);
 
   return (
     <div className="space-y-4 sm:space-y-6 max-w-full">
@@ -1581,15 +1834,69 @@ const UsersTab = ({ users, onDeleteUser, darkMode, onCreateUser }) => {
           </select>
         </div>
 
-        {/* Create User Button */}
-        <button
-          onClick={onCreateUser}
-          className="flex items-center justify-center space-x-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-medium transition-colors"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Create User</span>
-        </button>
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+          {/* Delete All Users Button */}
+          <button
+            onClick={onDeleteAllUsers}
+            disabled={selectableUsers.length === 0}
+            className={cn(
+              'flex items-center justify-center space-x-2 px-4 py-2 rounded-lg font-medium transition-colors',
+              selectableUsers.length === 0
+                ? 'bg-secondary-200 text-secondary-400 cursor-not-allowed'
+                : 'bg-danger-600 hover:bg-danger-700 text-white'
+            )}
+            title="Delete all non-admin users (admin accounts are preserved)"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>Delete All Users</span>
+          </button>
+
+          {/* Create User Button */}
+          <button
+            onClick={onCreateUser}
+            className="flex items-center justify-center space-x-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-medium transition-colors"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Create User</span>
+          </button>
+        </div>
       </div>
+
+      {/* Bulk Selection Bar */}
+      {selectedIds.length > 0 && (
+        <div className={cn(
+          'flex items-center justify-between gap-4 p-3 rounded-lg border',
+          darkMode ? 'bg-primary-900/20 border-primary-700' : 'bg-primary-50 border-primary-200'
+        )}>
+          <div className="flex items-center space-x-3">
+            <span className={cn(
+              'text-sm font-medium',
+              darkMode ? 'text-primary-300' : 'text-primary-700'
+            )}>
+              {selectedIds.length} user{selectedIds.length === 1 ? '' : 's'} selected
+            </span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={clearSelection}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                darkMode
+                  ? 'bg-secondary-700 hover:bg-secondary-600 text-secondary-300'
+                  : 'bg-white hover:bg-secondary-100 text-secondary-700 border border-secondary-300'
+              )}
+            >
+              Clear
+            </button>
+            <button
+              onClick={() => onDeleteSelected(selectedIds)}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium bg-danger-600 hover:bg-danger-700 text-white transition-colors"
+            >
+              Delete Selected
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Users Table */}
       <motion.div
@@ -1632,6 +1939,15 @@ const UsersTab = ({ users, onDeleteUser, darkMode, onCreateUser }) => {
                 darkMode ? 'border-secondary-700' : 'border-secondary-200'
               )}>
                 <tr>
+                  <th className="py-3 pl-4 pr-2 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allFilteredSelected}
+                      onChange={toggleSelectAll}
+                      disabled={filteredSelectableIds.length === 0}
+                      className="w-4 h-4 text-primary-600 rounded focus:ring-primary-500"
+                    />
+                  </th>
                   <th className={cn(
                     'text-left py-3 px-4 font-medium text-sm',
                     darkMode ? 'text-secondary-400' : 'text-secondary-600'
@@ -1657,6 +1973,18 @@ const UsersTab = ({ users, onDeleteUser, darkMode, onCreateUser }) => {
                     Role
                   </th>
                   <th className={cn(
+                    'text-left py-3 px-4 font-medium text-sm hidden xl:table-cell',
+                    darkMode ? 'text-secondary-400' : 'text-secondary-600'
+                  )}>
+                    Registered
+                  </th>
+                  <th className={cn(
+                    'text-left py-3 px-4 font-medium text-sm hidden xl:table-cell',
+                    darkMode ? 'text-secondary-400' : 'text-secondary-600'
+                  )}>
+                    Last Login
+                  </th>
+                  <th className={cn(
                     'text-right py-3 px-4 font-medium text-sm',
                     darkMode ? 'text-secondary-400' : 'text-secondary-600'
                   )}>
@@ -1665,91 +1993,171 @@ const UsersTab = ({ users, onDeleteUser, darkMode, onCreateUser }) => {
                 </tr>
               </thead>
               <tbody>
-                {filteredUsers.map((user) => (
-                  <tr
-                    key={user.id}
-                    className={cn(
-                      'border-b transition-colors hover:bg-opacity-50',
-                      darkMode
-                        ? 'border-secondary-700 hover:bg-secondary-700'
-                        : 'border-secondary-100 hover:bg-secondary-50'
-                    )}
-                  >
-                    <td className="py-3 px-4">
-                      <div>
-                        <p className={cn(
-                          'font-medium text-sm sm:text-base',
-                          darkMode ? 'text-white' : 'text-secondary-900'
-                        )}>
-                          {user.username}
-                        </p>
-                        <p className={cn(
-                          'text-xs sm:text-sm',
-                          darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                        )}>
-                          {user.email}
-                        </p>
-                        <p className={cn(
-                          'text-xs font-mono sm:hidden',
-                          darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                        )}>
-                          Ext: {user.extension}
-                        </p>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 hidden sm:table-cell">
-                      <span className={cn(
-                        'font-mono text-sm',
-                        darkMode ? 'text-secondary-300' : 'text-secondary-700'
-                      )}>
-                        {user.extension}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center space-x-2">
-                        <div className={cn(
-                          'w-2 h-2 rounded-full',
-                          getStatusColor(user.status, 'bg')
-                        )} />
-                        <span className={cn(
-                          'text-xs sm:text-sm capitalize',
-                          getStatusColor(user.status, 'text')
-                        )}>
-                          {user.status}
-                        </span>
-                      </div>
-                      <span className={cn(
-                        'md:hidden px-2 py-1 rounded-full text-xs font-medium mt-1 inline-block',
-                        user.role === 'admin'
-                          ? 'bg-primary-100 text-primary-700'
-                          : 'bg-secondary-100 text-secondary-700'
-                      )}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 hidden md:table-cell">
-                      <span className={cn(
-                        'px-2 py-1 rounded-full text-xs font-medium',
-                        user.role === 'admin'
-                          ? 'bg-primary-100 text-primary-700'
-                          : 'bg-secondary-100 text-secondary-700'
-                      )}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      {user.role !== 'admin' && (
-                        <button
-                          onClick={() => onDeleteUser(user)}
-                          className="p-2 text-danger-600 hover:bg-danger-50 rounded-lg transition-colors"
-                          title={`Delete user ${user.username}`}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                {filteredUsers.map((user) => {
+                  const isAdmin = user.role === 'admin';
+                  const isSelected = selectedIds.includes(user.id);
+                  const disabled = user.enabled === false;
+                  return (
+                    <tr
+                      key={user.id}
+                      className={cn(
+                        'border-b transition-colors hover:bg-opacity-50',
+                        darkMode
+                          ? 'border-secondary-700 hover:bg-secondary-700'
+                          : 'border-secondary-100 hover:bg-secondary-50',
+                        disabled && 'opacity-60'
                       )}
-                    </td>
-                  </tr>
-                ))}
+                    >
+                      <td className="py-3 pl-4 pr-2">
+                        {!isAdmin && (
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelect(user.id)}
+                            className="w-4 h-4 text-primary-600 rounded focus:ring-primary-500"
+                          />
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center space-x-3">
+                          <div className={cn(
+                            'flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm',
+                            user.role === 'admin'
+                              ? darkMode ? 'bg-primary-900/40 text-primary-300' : 'bg-primary-100 text-primary-700'
+                              : darkMode ? 'bg-secondary-700 text-secondary-300' : 'bg-secondary-200 text-secondary-700'
+                          )}>
+                            {(user.username || '?').slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className={cn(
+                              'font-medium text-sm sm:text-base truncate',
+                              darkMode ? 'text-white' : 'text-secondary-900'
+                            )}>
+                              {user.username}
+                              {disabled && (
+                                <span className={cn(
+                                  'ml-2 px-2 py-0.5 rounded-full text-xs font-medium',
+                                  darkMode ? 'bg-danger-900/30 text-danger-400' : 'bg-danger-100 text-danger-700'
+                                )}>
+                                  Disabled
+                                </span>
+                              )}
+                            </p>
+                            <p className={cn(
+                              'text-xs sm:text-sm truncate',
+                              darkMode ? 'text-secondary-400' : 'text-secondary-600'
+                            )}>
+                              {user.email}
+                            </p>
+                            <p className={cn(
+                              'text-xs font-mono sm:hidden',
+                              darkMode ? 'text-secondary-400' : 'text-secondary-600'
+                            )}>
+                              Ext: {user.extension}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 hidden sm:table-cell">
+                        <span className={cn(
+                          'font-mono text-sm',
+                          darkMode ? 'text-secondary-300' : 'text-secondary-700'
+                        )}>
+                          {user.extension}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center space-x-2">
+                          <div className={cn(
+                            'w-2 h-2 rounded-full',
+                            getStatusColor(user.status, 'bg')
+                          )} />
+                          <span className={cn(
+                            'text-xs sm:text-sm capitalize',
+                            getStatusColor(user.status, 'text')
+                          )}>
+                            {user.status}
+                          </span>
+                        </div>
+                        <span className={cn(
+                          'md:hidden px-2 py-1 rounded-full text-xs font-medium mt-1 inline-block',
+                          user.role === 'admin'
+                            ? 'bg-primary-100 text-primary-700'
+                            : 'bg-secondary-100 text-secondary-700'
+                        )}>
+                          {user.role}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 hidden md:table-cell">
+                        <span className={cn(
+                          'px-2 py-1 rounded-full text-xs font-medium',
+                          user.role === 'admin'
+                            ? 'bg-primary-100 text-primary-700'
+                            : 'bg-secondary-100 text-secondary-700'
+                        )}>
+                          {user.role}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 hidden xl:table-cell">
+                        <span className={cn(
+                          'text-xs sm:text-sm whitespace-nowrap',
+                          darkMode ? 'text-secondary-300' : 'text-secondary-700'
+                        )}>
+                          {user.created_at ? formatUserDate(user.created_at) : '—'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 hidden xl:table-cell">
+                        <span className={cn(
+                          'text-xs sm:text-sm whitespace-nowrap',
+                          darkMode ? 'text-secondary-300' : 'text-secondary-700'
+                        )}>
+                          {user.last_login ? formatUserDate(user.last_login) : 'Never'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end space-x-1">
+                          <button
+                            onClick={() => onViewUser(user)}
+                            className="p-2 text-secondary-500 hover:bg-secondary-100 dark:hover:bg-secondary-700 rounded-lg transition-colors"
+                            title={`View details for ${user.username}`}
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => onEditUser(user)}
+                            className="p-2 text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                            title={`Edit user ${user.username}`}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          {!isAdmin && (
+                            <>
+                              <button
+                                onClick={() => onToggleUserEnabled(user)}
+                                className={cn(
+                                  'p-2 rounded-lg transition-colors',
+                                  disabled
+                                    ? 'text-success-600 hover:bg-success-50'
+                                    : 'text-warning-600 hover:bg-warning-50'
+                                )}
+                                title={disabled ? `Enable user ${user.username}` : `Disable user ${user.username}`}
+                              >
+                                {disabled ? <UserCheck className="w-4 h-4" /> : <UserX className="w-4 h-4" />}
+                              </button>
+                              <button
+                                onClick={() => onDeleteUser(user)}
+                                className="p-2 text-danger-600 hover:bg-danger-50 rounded-lg transition-colors"
+                                title={`Delete user ${user.username}`}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1991,346 +2399,6 @@ const CallLogsTab = ({ callLogs, onDeleteCallLog, darkMode }) => {
   );
 };
 
-// System Status Tab Component
-const SystemTab = ({ systemStatus, darkMode }) => {
-  // Function to determine actual online status based on WebSocket connection and login status
-  const getActualStatus = (status) => {
-    // If WebSocket is connected with active clients, user is definitely online
-    if (status.ws_connected && status.client_count > 0) {
-      return 'online';
-    }
-
-    // If user has database status as online but no WebSocket connection,
-    // they might be recently logged in but not actively connected - show as away
-    if (status.status === 'online' && !status.ws_connected) {
-      return 'away';
-    }
-
-    // If no WebSocket connection, user is effectively offline regardless of database status
-    if (!status.ws_connected) {
-      return 'offline';
-    }
-
-    // For all other cases, use the database status
-    return status.status;
-  };
-
-  if (!systemStatus) {
-    return (
-      <div className="text-center py-8">
-        <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4 text-primary-600" />
-        <p className={cn(
-          'text-lg',
-          darkMode ? 'text-secondary-400' : 'text-secondary-600'
-        )}>
-          Loading system status...
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4 sm:space-y-6 max-w-full">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-        {/* Connection Status */}
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className={cn(
-            'p-4 sm:p-6 rounded-xl border',
-            darkMode
-              ? 'bg-secondary-800 border-secondary-700'
-              : 'bg-white border-secondary-200'
-          )}
-        >
-          <h3 className={cn(
-            'text-base sm:text-lg font-semibold mb-4 flex items-center space-x-2',
-            darkMode ? 'text-white' : 'text-secondary-900'
-          )}>
-            <Wifi className="w-4 h-4 sm:w-5 sm:h-5" />
-            <span>Connection Status</span>
-          </h3>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className={cn(
-                'text-xs sm:text-sm',
-                darkMode ? 'text-secondary-400' : 'text-secondary-600'
-              )}>
-                Total Clients
-              </span>
-              <span className={cn(
-                'font-medium text-sm sm:text-base',
-                darkMode ? 'text-white' : 'text-secondary-900'
-              )}>
-                {systemStatus.total_clients}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className={cn(
-                'text-xs sm:text-sm',
-                darkMode ? 'text-secondary-400' : 'text-secondary-600'
-              )}>
-                Connected Extensions
-              </span>
-              <span className={cn(
-                'font-medium text-sm sm:text-base',
-                darkMode ? 'text-white' : 'text-secondary-900'
-              )}>
-                {systemStatus.connected_extensions?.length || 0}
-              </span>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* System Health */}
-        <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className={cn(
-            'p-4 sm:p-6 rounded-xl border',
-            darkMode
-              ? 'bg-secondary-800 border-secondary-700'
-              : 'bg-white border-secondary-200'
-          )}
-        >
-          <h3 className={cn(
-            'text-base sm:text-lg font-semibold mb-4 flex items-center space-x-2',
-            darkMode ? 'text-white' : 'text-secondary-900'
-          )}>
-            <Database className="w-4 h-4 sm:w-5 sm:h-5" />
-            <span>System Health</span>
-          </h3>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className={cn(
-                'text-xs sm:text-sm',
-                darkMode ? 'text-secondary-400' : 'text-secondary-600'
-              )}>
-                Database
-              </span>
-              <div className="flex items-center space-x-2">
-                <CheckCircle className="w-4 h-4 text-success-500" />
-                <span className="text-xs sm:text-sm text-success-600">Connected</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className={cn(
-                'text-xs sm:text-sm',
-                darkMode ? 'text-secondary-400' : 'text-secondary-600'
-              )}>
-                WebSocket Server
-              </span>
-              <div className="flex items-center space-x-2">
-                <CheckCircle className="w-4 h-4 text-success-500" />
-                <span className="text-xs sm:text-sm text-success-600">Running</span>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Extension Details */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className={cn(
-          'rounded-xl border overflow-hidden',
-          darkMode
-            ? 'bg-secondary-800 border-secondary-700'
-            : 'bg-white border-secondary-200'
-        )}
-      >
-        <div className="p-4 sm:p-6 border-b border-secondary-200 dark:border-secondary-700">
-          <h3 className={cn(
-            'text-base sm:text-lg font-semibold mb-2',
-            darkMode ? 'text-white' : 'text-secondary-900'
-          )}>
-            Extension Status Details
-          </h3>
-          <p className={cn(
-            'text-xs sm:text-sm',
-            darkMode ? 'text-secondary-400' : 'text-secondary-600'
-          )}>
-            Status shows "online" only for extensions with active WebSocket connections.
-            Users without connections show as "offline" or "away" regardless of login status.
-          </p>
-        </div>
-        {!systemStatus.connection_status || systemStatus.connection_status.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-8 text-center">
-            <Wifi className={cn(
-              'w-16 h-16 mb-4',
-              darkMode ? 'text-secondary-600' : 'text-secondary-400'
-            )} />
-            <h3 className={cn(
-              'text-lg font-medium mb-2',
-              darkMode ? 'text-secondary-400' : 'text-secondary-600'
-            )}>
-              No extension data
-            </h3>
-            <p className={cn(
-              'text-sm',
-              darkMode ? 'text-secondary-500' : 'text-secondary-500'
-            )}>
-              Extension status information will appear here when available.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className={cn(
-                'border-b',
-                darkMode ? 'border-secondary-700' : 'border-secondary-200'
-              )}>
-                <tr>
-                  <th className={cn(
-                    'text-left py-3 px-4 font-medium text-sm',
-                    darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                  )}>
-                    Extension
-                  </th>
-                  <th className={cn(
-                    'text-left py-3 px-4 font-medium text-sm hidden sm:table-cell',
-                    darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                  )}>
-                    Username
-                  </th>
-                  <th className={cn(
-                    'text-left py-3 px-4 font-medium text-sm',
-                    darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                  )}>
-                    Status
-                  </th>
-                  <th className={cn(
-                    'text-left py-3 px-4 font-medium text-sm hidden md:table-cell',
-                    darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                  )}>
-                    WebSocket
-                  </th>
-                  <th className={cn(
-                    'text-left py-3 px-4 font-medium text-sm hidden lg:table-cell',
-                    darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                  )}>
-                    Clients
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {systemStatus.connection_status?.map((status) => (
-                  <tr
-                    key={status.extension}
-                    className={cn(
-                      'border-b transition-colors hover:bg-opacity-50',
-                      darkMode
-                        ? 'border-secondary-700 hover:bg-secondary-700'
-                        : 'border-secondary-100 hover:bg-secondary-50'
-                    )}
-                  >
-                    <td className="py-3 px-4">
-                      <div>
-                        <span className={cn(
-                          'font-mono text-sm',
-                          darkMode ? 'text-secondary-300' : 'text-secondary-700'
-                        )}>
-                          {status.extension}
-                        </span>
-                        <p className={cn(
-                          'text-xs sm:hidden',
-                          darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                        )}>
-                          {status.username}
-                        </p>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 hidden sm:table-cell">
-                      <span className={cn(
-                        'text-sm',
-                        darkMode ? 'text-white' : 'text-secondary-900'
-                      )}>
-                        {status.username}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center space-x-2">
-                        {(() => {
-                          const actualStatus = getActualStatus(status);
-                          return (
-                            <>
-                              <div className={cn(
-                                'w-2 h-2 rounded-full',
-                                getStatusColor(actualStatus, 'bg')
-                              )} />
-                              <span className={cn(
-                                'text-xs sm:text-sm capitalize',
-                                getStatusColor(actualStatus, 'text')
-                              )}>
-                                {actualStatus}
-                              </span>
-                            </>
-                          );
-                        })()}
-                      </div>
-                      <div className="md:hidden mt-1 flex items-center space-x-1">
-                        {status.ws_connected ? (
-                          <>
-                            <CheckCircle className="w-3 h-3 text-success-500" />
-                            <span className="text-xs text-success-600">Connected</span>
-                          </>
-                        ) : (
-                          <>
-                            <XCircle className="w-3 h-3 text-danger-500" />
-                            <span className="text-xs text-danger-600">Disconnected</span>
-                          </>
-                        )}
-                        <span className={cn(
-                          'text-xs lg:hidden ml-2',
-                          darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                        )}>
-                          ({status.client_count} clients)
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 hidden md:table-cell">
-                      <div className="flex items-center space-x-2">
-                        {status.ws_connected ? (
-                          <>
-                            <CheckCircle className="w-4 h-4 text-success-500" />
-                            <span className="text-sm text-success-600">Connected</span>
-                          </>
-                        ) : (
-                          <>
-                            <XCircle className="w-4 h-4 text-danger-500" />
-                            <span className="text-sm text-danger-600">Disconnected</span>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 hidden lg:table-cell">
-                      <div className="flex items-center space-x-1">
-                        <span className={cn(
-                          'text-sm font-medium',
-                          darkMode ? 'text-secondary-300' : 'text-secondary-700'
-                        )}>
-                          {status.client_count}
-                        </span>
-                        <span className={cn(
-                          'text-xs',
-                          darkMode ? 'text-secondary-400' : 'text-secondary-600'
-                        )}>
-                          {status.client_count === 1 ? 'device' : 'devices'}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </motion.div>
-    </div>
-  );
-};
-
 // Settings Tab Component
 const SettingsTab = ({
   darkMode,
@@ -2350,8 +2418,8 @@ const SettingsTab = ({
     maxCallLogs: 1000,
     sessionTimeout: 24,
     enableDebugMode: false,
-    asteriskHost: '192.168.1.2',
-    backendHost: '192.168.1.2',
+    asteriskHost: typeof window !== 'undefined' ? window.location.hostname : '',
+    backendHost: typeof window !== 'undefined' ? window.location.hostname : '',
     sipPort: '8088',
     // Theme Settings
     theme: 'auto',
@@ -2773,6 +2841,8 @@ const SettingsTab = ({
                   'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
                   systemHealth.asteriskStatus === 'online'
                     ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                    : systemHealth.asteriskStatus === 'checking'
+                    ? 'bg-gray-100 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300'
                     : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
                 )}>
                   {systemHealth.asteriskStatus}
@@ -2787,6 +2857,8 @@ const SettingsTab = ({
                   'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
                   systemHealth.databaseStatus === 'online'
                     ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                    : systemHealth.databaseStatus === 'checking'
+                    ? 'bg-gray-100 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300'
                     : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
                 )}>
                   {systemHealth.databaseStatus}
@@ -2801,6 +2873,8 @@ const SettingsTab = ({
                   'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
                   systemHealth.backendStatus === 'online'
                     ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                    : systemHealth.backendStatus === 'checking'
+                    ? 'bg-gray-100 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300'
                     : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
                 )}>
                   {systemHealth.backendStatus}
@@ -2887,7 +2961,7 @@ const SettingsTab = ({
                   System Uptime
                 </span>
                 <span className={cn('text-sm', darkMode ? 'text-white' : 'text-secondary-900')}>
-                  {systemHealth.uptime}
+                  {systemHealth.uptime || '—'}
                 </span>
               </div>
               <div>
@@ -2895,7 +2969,7 @@ const SettingsTab = ({
                   Last Health Check
                 </span>
                 <span className={cn('text-sm', darkMode ? 'text-white' : 'text-secondary-900')}>
-                  {systemHealth.lastCheck}
+                  {systemHealth.lastCheck || '—'}
                 </span>
               </div>
             </div>
@@ -2945,7 +3019,7 @@ const SettingsTab = ({
                   Last Backup
                 </span>
                 <span className={cn(darkMode ? 'text-white' : 'text-secondary-900')}>
-                  {backupStatus.lastBackup}
+                  {backupStatus.lastBackup || 'No backups yet'}
                 </span>
               </div>
               <div>
@@ -2953,7 +3027,7 @@ const SettingsTab = ({
                   Size
                 </span>
                 <span className={cn(darkMode ? 'text-white' : 'text-secondary-900')}>
-                  {backupStatus.backupSize}
+                  {backupStatus.backupSize || '—'}
                 </span>
               </div>
               <div>
@@ -2970,7 +3044,7 @@ const SettingsTab = ({
                     ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
                     : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
                 )}>
-                  {backupStatus.status}
+                  {backupStatus.status || 'none'}
                 </span>
               </div>
               <div>
@@ -2990,7 +3064,7 @@ const SettingsTab = ({
                   Next Scheduled
                 </span>
                 <span className={cn('text-sm', darkMode ? 'text-white' : 'text-secondary-900')}>
-                  {backupStatus.nextBackup}
+                  {backupStatus.nextBackup || 'Not scheduled'}
                 </span>
               </div>
               <div>
@@ -2998,7 +3072,7 @@ const SettingsTab = ({
                   Available Space
                 </span>
                 <span className={cn('text-sm', darkMode ? 'text-white' : 'text-secondary-900')}>
-                  {backupStatus.availableSpace}
+                  {backupStatus.availableSpace || '—'}
                 </span>
               </div>
             </div>
@@ -3173,26 +3247,6 @@ const SettingsTab = ({
               <span>Asterisk Diagnostics</span>
             </button>
 
-            {/* Debug button for testing backup listing */}
-            <button
-              onClick={async () => {
-                try {
-                  console.log('[AdminDashboard] Testing backup listing...');
-                  const backups = await backupService.listBackups();
-                  console.log('[AdminDashboard] Test result:', backups);
-                  toast.success(`Found ${backups.length} backups - check console`);
-                } catch (error) {
-                  console.error('[AdminDashboard] Test failed:', error);
-                  toast.error('Test failed - check console');
-                }
-              }}
-              className={cn(
-                "flex items-center justify-center space-x-2 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 min-h-[44px] w-full",
-                "bg-blue-600 hover:bg-blue-700 text-white transform hover:scale-105"
-              )}
-            >
-              <span>🔍 Test Backups</span>
-            </button>
           </div>
         </div>
 
@@ -3241,8 +3295,8 @@ const SettingsTab = ({
                         maxCallLogs: 1000,
                         sessionTimeout: 24,
                         enableDebugMode: false,
-                        asteriskHost: '192.168.1.2',
-                        backendHost: '192.168.1.2',
+                        asteriskHost: typeof window !== 'undefined' ? window.location.hostname : '',
+                        backendHost: typeof window !== 'undefined' ? window.location.hostname : '',
                         sipPort: '8088',
                       });
                       toast.success('Settings reset to default');

@@ -397,6 +397,55 @@ func (h *Hub) SetUserOfflineOnDisconnect(extension string) {
 	}
 }
 
+// DisconnectExtension forcefully closes every WebSocket client for an extension.
+// Used by admin operations (delete user / delete all users / disable account) so a
+// removed or disabled user is immediately dropped from all active sessions.
+func (h *Hub) DisconnectExtension(extension string) int {
+	if extension == "" {
+		return 0
+	}
+
+	h.mutex.Lock()
+	clients, exists := h.extensionClients[extension]
+	if !exists || len(clients) == 0 {
+		h.mutex.Unlock()
+		return 0
+	}
+
+	disconnected := 0
+	for _, client := range clients {
+		if _, ok := h.clients[client]; ok {
+			delete(h.clients, client)
+			h.safeCloseSend(client)
+			if client.conn != nil {
+				client.conn.Close()
+			}
+			disconnected++
+		}
+	}
+	delete(h.extensionClients, extension)
+	h.mutex.Unlock()
+
+	log.Printf("Forcefully disconnected %d client(s) for extension %s", disconnected, extension)
+
+	// Update presence since the extension is no longer connected
+	if disconnected > 0 {
+		h.SetUserOfflineOnDisconnect(extension)
+	}
+
+	return disconnected
+}
+
+// DisconnectAllExtensions disconnects every client for the given extensions.
+// Returns the total number of clients disconnected.
+func (h *Hub) DisconnectAllExtensions(extensions []string) int {
+	total := 0
+	for _, ext := range extensions {
+		total += h.DisconnectExtension(ext)
+	}
+	return total
+}
+
 // GetExtensionStatus returns detailed status for an extension
 func (h *Hub) GetExtensionStatus(extension string) map[string]interface{} {
 	h.mutex.RLock()

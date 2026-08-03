@@ -71,9 +71,10 @@ class AdminService {
           extension: user.extension || user.Extension,
           role: user.role || user.Role,
           status: this.determineUserStatus(user),
+          enabled: user.enabled !== undefined ? user.enabled : true,
           created_at: user.created_at || user.CreatedAt,
           last_login: user.last_login || user.LastLogin,
-          is_online: user.is_online || user.IsOnline || false
+          is_online: user.is_online !== undefined ? user.is_online : (user.IsOnline || false)
         }))
       };
     } catch (error) {
@@ -88,6 +89,12 @@ class AdminService {
 
   // Determine user status based on various factors
   determineUserStatus(user) {
+    // Respect the server-reported status when present
+    const serverStatus = (user.status || user.Status || '').toLowerCase();
+    if (['online', 'offline', 'busy', 'away'].includes(serverStatus)) {
+      return serverStatus;
+    }
+
     // Check if user is explicitly marked as online
     if (user.is_online || user.IsOnline) {
       return 'online';
@@ -109,6 +116,36 @@ class AdminService {
 
     // Default to offline
     return 'offline';
+  }
+
+  // Delete all non-admin users (admin only, preserves admin accounts)
+  async deleteAllUsers() {
+    try {
+      const response = await fetch(`${this.baseURL}/protected/admin/users/delete-all?confirm=true`, {
+        method: 'DELETE',
+        headers: this.getAuthHeaders(),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data.error || `HTTP error! status: ${response.status}`,
+        };
+      }
+
+      return {
+        success: true,
+        ...data,
+      };
+    } catch (error) {
+      console.error('Failed to delete all users:', error);
+      return {
+        success: false,
+        error: error.message || 'Network error occurred',
+      };
+    }
   }
 
   // Delete user
@@ -284,6 +321,37 @@ class AdminService {
     } catch (error) {
       console.error('Failed to get call logs:', error);
       throw error;
+    }
+  }
+
+  // Get call logs (admin view - all users)
+  async getAdminCallLogs(limit = 100, filters = {}) {
+    try {
+      const queryParams = new URLSearchParams({ limit });
+      if (filters.status) queryParams.set('status', filters.status);
+      if (filters.search) queryParams.set('search', filters.search);
+
+      const response = await fetch(`${this.baseURL}/protected/admin/call-logs?${queryParams}`, {
+        method: 'GET',
+        headers: this.getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        call_logs: data.call_logs || [],
+      };
+    } catch (error) {
+      console.error('Failed to get admin call logs:', error);
+      return {
+        success: false,
+        error: error.message,
+        call_logs: [],
+      };
     }
   }
 

@@ -395,7 +395,64 @@ const ConversationItem = memo(function ConversationItem({ conv, isSelected, pres
   );
 });
 
-// Quoted message preview rendered inside a bubble that is a reply.
+const PRESENCE_LABEL = { online: "Online", busy: "Busy", away: "Away", offline: "Offline" };
+
+// A user row used in contact search results and the "Contacts" sidebar section.
+// Always shows avatar, name, extension and live presence (Online/Busy/Away/Offline).
+const ContactItem = memo(function ContactItem({ user, presence = "offline", hasConversation, onClick, dark }) {
+  const u = user || {};
+  const name = u.username || u.name || `Ext ${u.extension}`;
+  const presenceText = PRESENCE_LABEL[presence] || "Offline";
+  const presenceDot =
+    presence === "online"
+      ? "bg-[#00a884]"
+      : presence === "busy"
+        ? "bg-amber-500"
+        : presence === "away"
+          ? "bg-orange-400"
+          : "bg-gray-400";
+  const presenceTextCls =
+    presence === "online"
+      ? "text-[#00a884]"
+      : presence === "busy"
+        ? "text-amber-500"
+        : presence === "away"
+          ? "text-orange-400"
+          : dark
+            ? "text-gray-500"
+            : "text-gray-400";
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+        dark ? "hover:bg-gray-800" : "hover:bg-gray-100"
+      }`}
+    >
+      <Avatar user={u} presence={presence} />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold truncate">{name}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>{u.extension}</span>
+          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${presenceTextCls}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${presenceDot}`} />
+            {presenceText}
+          </span>
+        </div>
+      </div>
+      {hasConversation && (
+        <span className="flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-[#00a884]/10 text-[#00a884]">
+          Chat
+        </span>
+      )}
+    </button>
+  );
+});
+
+const SectionLabel = ({ children }) => (
+  <p className="px-4 pt-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+    {children}
+  </p>
+);
 const QuotedBlock = memo(function QuotedBlock({ replyTo, quoteName, dark, mine }) {
   const border = mine ? "border-[#4db6ac]" : dark ? "border-gray-500" : "border-gray-300";
   const textCls = mine ? (dark ? "text-gray-200" : "text-gray-700") : dark ? "text-gray-200" : "text-gray-700";
@@ -831,6 +888,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
   const [draft, setDraft] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [presenceMap, setPresenceMap] = useState(new Map());
+  const [allUsers, setAllUsers] = useState([]);
   const [typingMap, setTypingMap] = useState(new Map());
   const [showSidebar, setShowSidebar] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
@@ -932,14 +990,21 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     try {
       const data = await getUsers();
       if (data.success) {
+        // The backend already excludes the logged-in user, but filter
+        // defensively so the authenticated account can never appear in
+        // search results or the contact list.
+        const list = (data.users || []).filter(
+          (u) => u && u.id !== undefined && String(u.id) !== String(me)
+        );
+        setAllUsers(list);
         const map = new Map();
-        (data.users || []).forEach((u) => {
+        list.forEach((u) => {
           if (u.extension && u.status && u.status !== "offline") map.set(u.extension, u.status);
         });
         setPresenceMap(map);
       }
     } catch (e) {}
-  }, []);
+  }, [me]);
 
   const openConversation = useCallback(async (user) => {
     if (!user || !user.id) return;
@@ -1378,16 +1443,34 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
 
   /* ---------------- derived render state ---------------- */
 
+  const searchActive = searchTerm.trim().length > 0;
+  const searchQuery = searchTerm.trim().toLowerCase();
+
+  // Existing conversations filtered by the search term.
   const filteredConversations = conversations.filter((c) => {
-    if (!searchTerm) return true;
-    const q = searchTerm.toLowerCase();
+    if (!searchActive) return true;
     const u = c.user || {};
     return (
-      (u.username || "").toLowerCase().includes(q) ||
-      (u.name || "").toLowerCase().includes(q) ||
-      (u.extension || "").includes(q)
+      (u.username || "").toLowerCase().includes(searchQuery) ||
+      (u.name || "").toLowerCase().includes(searchQuery) ||
+      (u.extension || "").includes(searchQuery)
     );
   });
+
+  // Contact search results across ALL registered users (self excluded).
+  const matchedUsers = searchActive
+    ? allUsers.filter((u) => {
+        const haystack =
+          `${u.username || ""} ${u.name || ""} ${u.extension || ""} ${u.email || ""}`.toLowerCase();
+        return haystack.includes(searchQuery);
+      })
+    : [];
+
+  // For the sidebar "Contacts" section: users that don't already have a chat.
+  const inConversationIds = new Set(conversations.map((c) => String(c.user?.id)));
+  const contactsWithoutChat = allUsers.filter((u) => !inConversationIds.has(String(u.id)));
+
+  const userHasConversation = (user) => inConversationIds.has(String(user?.id));
 
   const messageGroups = groupMessages(messages);
 
@@ -1442,7 +1525,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
               <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-[18px] h-[18px] text-gray-400" />
               <input
                 type="text"
-                placeholder="Search conversations..."
+                placeholder="Search contacts..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className={`w-full pl-10 pr-10 py-2.5 rounded-xl text-sm outline-none transition-colors ${
@@ -1466,25 +1549,73 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
           <div className="flex-1 overflow-y-auto custom-scrollbar">
             {loadingConversations ? (
               <ConversationSkeletons />
-            ) : conversations.length === 0 ? (
-              <EmptyConversations dark={darkMode} />
-            ) : filteredConversations.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-6">
-                <FiSearch className="w-5 h-5 mb-2" />
-                <p className="text-xs text-center">No chats match “{searchTerm}”</p>
-              </div>
+            ) : searchActive ? (
+              /* ---- Search mode: show matching contacts (users) ---- */
+              matchedUsers.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-6">
+                  <FiSearch className="w-5 h-5 mb-2" />
+                  <p className="text-xs text-center">No contacts match “{searchTerm}”</p>
+                </div>
+              ) : (
+                <>
+                  <SectionLabel>Contacts</SectionLabel>
+                  {matchedUsers.map((u) => (
+                    <ContactItem
+                      key={u.id}
+                      user={u}
+                      presence={getPresence(u)}
+                      hasConversation={userHasConversation(u)}
+                      onClick={() => openConversation(u)}
+                      dark={darkMode}
+                    />
+                  ))}
+                </>
+              )
             ) : (
-              filteredConversations.map((conv) => (
-                <ConversationItem
-                  key={conv.conversation_id || conv.user.id}
-                  conv={conv}
-                  isSelected={String(selectedUser?.id) === String(conv.user.id)}
-                  presence={getPresence(conv.user)}
-                  typing={isTyping(conv.user.extension)}
-                  onClick={() => openConversation(conv.user)}
-                  dark={darkMode}
-                />
-              ))
+              /* ---- Browse mode: existing chats, then all other contacts ---- */
+              <>
+                {conversations.length > 0 && (
+                  <>
+                    <SectionLabel>Chats</SectionLabel>
+                    {filteredConversations.map((conv) => (
+                      <ConversationItem
+                        key={conv.conversation_id || conv.user.id}
+                        conv={conv}
+                        isSelected={String(selectedUser?.id) === String(conv.user.id)}
+                        presence={getPresence(conv.user)}
+                        typing={isTyping(conv.user.extension)}
+                        onClick={() => openConversation(conv.user)}
+                        dark={darkMode}
+                      />
+                    ))}
+                  </>
+                )}
+                {conversations.length === 0 && contactsWithoutChat.length > 0 && (
+                  <div className="flex flex-col items-center py-10 px-6 text-center">
+                    <p className="text-sm font-medium text-gray-500 dark:text-gray-400">No conversations yet</p>
+                    <p className="text-xs mt-1 text-gray-400 dark:text-gray-500">
+                      Pick a contact below to start messaging.
+                    </p>
+                  </div>
+                )}
+                {contactsWithoutChat.length > 0 && (
+                  <>
+                    <SectionLabel>Contacts</SectionLabel>
+                    {contactsWithoutChat.map((u) => (
+                      <ContactItem
+                        key={u.id}
+                        user={u}
+                        presence={getPresence(u)}
+                        onClick={() => openConversation(u)}
+                        dark={darkMode}
+                      />
+                    ))}
+                  </>
+                )}
+                {conversations.length === 0 && contactsWithoutChat.length === 0 && (
+                  <EmptyConversations dark={darkMode} />
+                )}
+              </>
             )}
           </div>
         </div>
@@ -1517,10 +1648,14 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
                     <MessageSkeletons />
                   ) : messages.length === 0 ? (
                     <div className="flex items-center justify-center h-full">
-                      <div className="text-center">
-                        <p className={`text-sm ${darkMode ? "text-gray-400" : "text-gray-500"}`}>No messages yet</p>
+                      <div className="text-center px-8">
+                        <Avatar user={selectedUser} size="lg" presence={getPresence(selectedUser)} className="mx-auto mb-4" />
+                        <p className={`text-sm font-semibold ${darkMode ? "text-gray-200" : "text-gray-700"}`}>
+                          Start your conversation with{" "}
+                          {selectedUser?.username || selectedUser?.name || `Ext ${selectedUser?.extension}`}.
+                        </p>
                         <p className={`text-xs mt-1 ${darkMode ? "text-gray-500" : "text-gray-400"}`}>
-                          Say hello to start the conversation
+                          Say hello to send the first message
                         </p>
                       </div>
                     </div>

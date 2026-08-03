@@ -220,11 +220,7 @@ const EnhancedSystemTab = ({ systemStatus, darkMode, systemHealth }) => {
   const calculateUptimePercentage = (uptime) => {
     if (!uptime || uptime === 'Unknown' || uptime === 'Unavailable') return 'N/A';
 
-    // For demonstration, assume good uptime if system is running
-    // In a real system, you'd track downtime vs total time
-    if (realTimeHealth.status === 'healthy') return '99.9%';
-    if (realTimeHealth.status === 'warning') return '95.0%';
-    return '85.0%';
+    return formatUptime(uptime);
   };
 
   const formatBytes = (bytes) => {

@@ -18,6 +18,7 @@ type User struct {
 	Status      string     `json:"status" gorm:"default:offline"` // online, offline, busy, away
 	Role        string     `json:"role" gorm:"default:user"`      // user, admin
 	IsOnline    bool       `json:"is_online" gorm:"default:false"`
+	Enabled     bool       `json:"enabled" gorm:"default:true"`   // account active/disabled (admin controlled)
 	LastLogin   *time.Time `json:"last_login"`
 	LastSeen    *time.Time `json:"last_seen"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -60,6 +61,7 @@ type UserResponse struct {
 	Status    string     `json:"status"`
 	Role      string     `json:"role"`
 	IsOnline  bool       `json:"is_online"`
+	Enabled   bool       `json:"enabled"`
 	LastLogin *time.Time `json:"last_login"`
 	LastSeen  *time.Time `json:"last_seen"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -104,6 +106,7 @@ func (u *User) ToResponse() UserResponse {
 		Status:    u.Status,
 		Role:      u.Role,
 		IsOnline:  u.IsOnline,
+		Enabled:   u.Enabled,
 		LastLogin: u.LastLogin,
 		LastSeen:  u.LastSeen,
 		CreatedAt: u.CreatedAt,

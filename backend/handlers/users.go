@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 	"voip-backend/database"
 	"voip-backend/middleware"
 	"voip-backend/models"
+	"voip-backend/security"
 	"voip-backend/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -213,13 +215,29 @@ func GetSystemStats(c *gin.Context) {
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 	database.GetDB().Model(&models.User{}).Where("status = ? AND is_online = ? AND last_seen > ?", "online", true, fiveMinutesAgo).Count(&onlineUsers)
 
+	// Presence breakdown (offline / busy / away)
+	var offlineUsers, busyUsers, awayUsers int64
+	database.GetDB().Model(&models.User{}).Where("status = ? OR (status != ? AND is_online = ?)", "offline", "online", false).Count(&offlineUsers)
+	database.GetDB().Model(&models.User{}).Where("status = ?", "busy").Count(&busyUsers)
+	database.GetDB().Model(&models.User{}).Where("status = ?", "away").Count(&awayUsers)
+
 	// Count active calls
 	var activeCalls int64
 	database.GetDB().Model(&models.ActiveCall{}).Count(&activeCalls)
 
-	// Count total calls today
-	var callsToday int64
+	// Count total calls today and all-time
+	var callsToday, totalCalls int64
 	database.GetDB().Model(&models.CallLog{}).Where("DATE(created_at) = DATE('now')").Count(&callsToday)
+	database.GetDB().Model(&models.CallLog{}).Count(&totalCalls)
+
+	// Count missed calls
+	var missedCalls int64
+	database.GetDB().Model(&models.MissedCall{}).Count(&missedCalls)
+
+	// Count messages and voicemails
+	var totalMessages, totalVoicemails int64
+	database.GetDB().Model(&models.Message{}).Count(&totalMessages)
+	database.GetDB().Model(&models.Voicemail{}).Count(&totalVoicemails)
 
 	// Get WebSocket connections
 	hub := websocket.GetHub()
@@ -231,11 +249,18 @@ func GetSystemStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"stats": gin.H{
-			"total_users":    totalUsers,
-			"online_users":   onlineUsers,
-			"active_calls":   activeCalls,
-			"calls_today":    callsToday,
-			"ws_connections": wsConnections,
+			"total_users":     totalUsers,
+			"online_users":    onlineUsers,
+			"offline_users":   offlineUsers,
+			"busy_users":      busyUsers,
+			"away_users":      awayUsers,
+			"active_calls":    activeCalls,
+			"calls_today":     callsToday,
+			"total_calls":     totalCalls,
+			"missed_calls":    missedCalls,
+			"total_messages":  totalMessages,
+			"total_voicemails": totalVoicemails,
+			"ws_connections":  wsConnections,
 		},
 	})
 }
@@ -307,12 +332,13 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	// Delete related call logs first (optional - you might want to keep them for audit)
-	if err := tx.Where("caller_id = ? OR callee_id = ?", user.ID, user.ID).Delete(&models.CallLog{}).Error; err != nil {
+	// Remove all related data (calls, messages, conversations, voicemails, etc.)
+	var removedFiles []string
+	if err := deleteUserData(tx, user.ID, &removedFiles); err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"error":   "Failed to delete user's call logs",
+			"error":   "Failed to clean up user data: " + err.Error(),
 		})
 		return
 	}
@@ -336,9 +362,15 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	// Notify other users about user deletion via WebSocket
+	// Clean up on-disk recordings for the deleted user
+	go removeUserFiles(removedFiles)
+
+	// Forcefully disconnect the deleted user's WebSocket sessions
 	hub := websocket.GetHub()
 	if hub != nil {
+		hub.DisconnectExtension(user.Extension)
+
+		// Notify other users about user deletion via WebSocket
 		hub.BroadcastMessage(gin.H{
 			"type":       "user_deleted",
 			"user_id":    user.ID,
@@ -351,6 +383,217 @@ func DeleteUser(c *gin.Context) {
 		"success": true,
 		"message": "User deleted successfully",
 		"user":    user.ToResponse(),
+	})
+}
+
+// deleteUserData removes all database rows associated with a user.
+// It must be called within an active transaction. Any on-disk files that
+// belong to the user (voicemail/voice message recordings) are appended to
+// removedFiles so the caller can clean them up after the transaction commits.
+func deleteUserData(tx *gorm.DB, userID uint, removedFiles *[]string) error {
+	// Calls
+	if err := tx.Where("caller_id = ? OR callee_id = ?", userID, userID).Delete(&models.CallLog{}).Error; err != nil {
+		return fmt.Errorf("call logs: %w", err)
+	}
+	if err := tx.Where("caller_id = ? OR callee_id = ?", userID, userID).Delete(&models.ActiveCall{}).Error; err != nil {
+		return fmt.Errorf("active calls: %w", err)
+	}
+
+	// Messages & conversations
+	// Message uses soft delete (gorm.DeletedAt), so Unscoped() is required to
+	// hard-delete the rows; otherwise the still-present Sender/Receiver foreign
+	// keys block deletion of the user row.
+	var messageFiles []string
+	tx.Model(&models.Message{}).Where("sender_id = ? OR receiver_id = ?", userID, userID).
+		Where("file_path != ?", "").Pluck("file_path", &messageFiles)
+	if err := tx.Unscoped().Where("sender_id = ? OR receiver_id = ?", userID, userID).Delete(&models.Message{}).Error; err != nil {
+		return fmt.Errorf("messages: %w", err)
+	}
+	if err := tx.Where("user1_id = ? OR user2_id = ?", userID, userID).Delete(&models.ChatConversation{}).Error; err != nil {
+		return fmt.Errorf("conversations: %w", err)
+	}
+
+	// Group chat membership
+	if err := tx.Where("user_id = ?", userID).Delete(&models.ChatGroupMember{}).Error; err != nil {
+		return fmt.Errorf("group memberships: %w", err)
+	}
+	if err := tx.Where("sender_id = ?", userID).Delete(&models.ChatGroupMessage{}).Error; err != nil {
+		return fmt.Errorf("group messages: %w", err)
+	}
+
+	// Groups created by the user (remove group + remaining members/messages)
+	var createdGroupIDs []uint
+	tx.Model(&models.ChatGroup{}).Where("created_by = ?", userID).Pluck("id", &createdGroupIDs)
+	if len(createdGroupIDs) > 0 {
+		if err := tx.Where("group_id IN ?", createdGroupIDs).Delete(&models.ChatGroupMember{}).Error; err != nil {
+			return fmt.Errorf("group memberships (created groups): %w", err)
+		}
+		if err := tx.Where("group_id IN ?", createdGroupIDs).Delete(&models.ChatGroupMessage{}).Error; err != nil {
+			return fmt.Errorf("group messages (created groups): %w", err)
+		}
+		if err := tx.Where("id IN ?", createdGroupIDs).Delete(&models.ChatGroup{}).Error; err != nil {
+			return fmt.Errorf("groups: %w", err)
+		}
+	}
+
+	// Voicemail & missed calls
+	var voicemailFiles []string
+	tx.Model(&models.Voicemail{}).Where("caller_id = ? OR callee_id = ?", userID, userID).
+		Where("file_path != ?", "").Pluck("file_path", &voicemailFiles)
+	if err := tx.Where("caller_id = ? OR callee_id = ?", userID, userID).Delete(&models.Voicemail{}).Error; err != nil {
+		return fmt.Errorf("voicemails: %w", err)
+	}
+	if err := tx.Where("caller_id = ? OR callee_id = ?", userID, userID).Delete(&models.MissedCall{}).Error; err != nil {
+		return fmt.Errorf("missed calls: %w", err)
+	}
+
+	var greetingFiles []string
+	tx.Model(&models.VoicemailGreeting{}).Where("user_id = ?", userID).
+		Where("file_path != ?", "").Pluck("file_path", &greetingFiles)
+	if err := tx.Where("user_id = ?", userID).Delete(&models.VoicemailGreeting{}).Error; err != nil {
+		return fmt.Errorf("voicemail greetings: %w", err)
+	}
+	if err := tx.Where("user_id = ?", userID).Delete(&models.VoicemailSettings{}).Error; err != nil {
+		return fmt.Errorf("voicemail settings: %w", err)
+	}
+
+	if removedFiles != nil {
+		*removedFiles = append(*removedFiles, messageFiles...)
+		*removedFiles = append(*removedFiles, voicemailFiles...)
+		*removedFiles = append(*removedFiles, greetingFiles...)
+	}
+
+	return nil
+}
+
+// removeUserFiles deletes recording files from disk (best effort).
+func removeUserFiles(files []string) {
+	for _, file := range files {
+		if file == "" {
+			continue
+		}
+		if err := os.Remove(file); err != nil {
+			// Ignore missing files; log everything else
+			if !os.IsNotExist(err) {
+				log.Printf("Failed to remove file %s: %v", file, err)
+			}
+		} else {
+			log.Printf("Removed file for deleted user: %s", file)
+		}
+	}
+}
+
+// DeleteAllUsers deletes every non-admin user, preserving all admin accounts (admin only)
+func DeleteAllUsers(c *gin.Context) {
+	if c.Query("confirm") != "true" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Confirmation required. Pass ?confirm=true to delete all users.",
+		})
+		return
+	}
+
+	var users []models.User
+	if err := database.GetDB().Where("role != ?", "admin").Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to fetch users",
+		})
+		return
+	}
+
+	if len(users) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "No non-admin users to delete",
+			"deleted": 0,
+			"preserved": 0,
+		})
+		return
+	}
+
+	// Start transaction for safe deletion
+	tx := database.GetDB().Begin()
+	if tx.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to start transaction",
+		})
+		return
+	}
+
+	deletedUsernames := make([]string, 0, len(users))
+	deletedExtensions := make([]string, 0, len(users))
+	allRemovedFiles := make([]string, 0)
+	for _, user := range users {
+		if err := deleteUserData(tx, user.ID, &allRemovedFiles); err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   "Failed to clean up data for user " + user.Username + ": " + err.Error(),
+			})
+			return
+		}
+
+		u := user
+		if err := tx.Delete(&u).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   "Failed to delete user " + user.Username,
+			})
+			return
+		}
+		deletedUsernames = append(deletedUsernames, user.Username)
+		deletedExtensions = append(deletedExtensions, user.Extension)
+	}
+
+	// Count preserved admin accounts
+	var adminCount int64
+	if err := tx.Model(&models.User{}).Where("role = ?", "admin").Count(&adminCount).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to count remaining admins",
+		})
+		return
+	}
+
+	// Commit transaction
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to commit deletion",
+		})
+		return
+	}
+
+	// Clean up on-disk recordings for all deleted users
+	go removeUserFiles(allRemovedFiles)
+
+	// Forcefully disconnect all deleted users' WebSocket sessions
+	hub := websocket.GetHub()
+	if hub != nil {
+		hub.DisconnectAllExtensions(deletedExtensions)
+
+		// Notify connected clients about the bulk deletion via WebSocket
+		hub.BroadcastMessage(gin.H{
+			"type":         "users_bulk_deleted",
+			"deleted":      len(deletedUsernames),
+			"usernames":    deletedUsernames,
+			"admins_left":  adminCount,
+			"timestamp":    time.Now().Unix(),
+		})
+	}
+
+	log.Printf("Admin deleted all non-admin users: %d users removed, %d admin accounts preserved", len(deletedUsernames), adminCount)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"message":   fmt.Sprintf("Deleted %d user(s), %d admin account(s) preserved", len(deletedUsernames), adminCount),
+		"deleted":   len(deletedUsernames),
+		"usernames": deletedUsernames,
+		"preserved": adminCount,
 	})
 }
 
@@ -632,6 +875,11 @@ func CreateUser(c *gin.Context) {
 	if extension == "" {
 		extension = generateExtension()
 	} else {
+		// Validate extension format (4-6 digits), matching the frontend rule
+		if !security.IsValidExtension(extension) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid extension format. Must be 4-6 digits."})
+			return
+		}
 		var count int64
 		database.GetDB().Model(&models.User{}).Where("extension = ?", extension).Count(&count)
 		if count > 0 {
@@ -688,6 +936,8 @@ func UpdateUser(c *gin.Context) {
 		Extension string `json:"extension"`
 		Role      string `json:"role"`
 		Status    string `json:"status"`
+		Password  string `json:"password"`
+		Enabled   *bool  `json:"enabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -711,6 +961,10 @@ func UpdateUser(c *gin.Context) {
 		}
 		return
 	}
+
+	// Determine if the admin is updating their own account (to prevent lockouts)
+	adminUserID, _, _, _, adminInContext := middleware.GetUserFromContext(c)
+	isSelf := adminInContext && uint(userID) == adminUserID
 
 	// Prepare updates
 	updates := make(map[string]interface{})
@@ -758,7 +1012,50 @@ func UpdateUser(c *gin.Context) {
 			})
 			return
 		}
+		// Prevent an admin from demoting their own account (would remove admin access)
+		if isSelf && req.Role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "You cannot remove your own admin role",
+			})
+			return
+		}
 		updates["role"] = req.Role
+	}
+
+	if req.Password != "" {
+		if len(req.Password) < 6 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Password must be at least 6 characters",
+			})
+			return
+		}
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to hash password",
+			})
+			return
+		}
+		updates["password"] = string(hashedPassword)
+	}
+
+	// Track whether this update disables the account so we can drop active sessions
+	wasDisabled := false
+	if req.Enabled != nil && *req.Enabled != user.Enabled {
+		// Prevent an admin from disabling their own account
+		if isSelf && !*req.Enabled {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "You cannot disable your own account",
+			})
+			return
+		}
+		updates["enabled"] = *req.Enabled
+		if !*req.Enabled {
+			// Disabled accounts should not remain connected
+			wasDisabled = true
+			updates["status"] = "offline"
+			updates["is_online"] = false
+		}
 	}
 
 	if req.Status != "" && req.Status != user.Status {
@@ -800,6 +1097,14 @@ func UpdateUser(c *gin.Context) {
 		}
 
 		log.Printf("Admin updated user: %s (ID: %d)", user.Username, user.ID)
+	}
+
+	// Forcefully terminate any active sessions of a newly disabled account
+	if wasDisabled {
+		hub := websocket.GetHub()
+		if hub != nil {
+			hub.DisconnectExtension(user.Extension)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

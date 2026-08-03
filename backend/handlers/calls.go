@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"voip-backend/asterisk"
@@ -1081,6 +1082,42 @@ func BulkDeleteCallLogsByFilter(c *gin.Context) {
 		"success":       true,
 		"message":       fmt.Sprintf("Successfully deleted %d call logs", result.RowsAffected),
 		"deleted_count": result.RowsAffected,
+	})
+}
+
+// GetAdminCallLogs returns all call logs across the system (admin only)
+func GetAdminCallLogs(c *gin.Context) {
+	query := database.GetDB().Preload("Caller").Preload("Callee")
+
+	limitStr := c.DefaultQuery("limit", "100")
+	if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+		query = query.Limit(limit)
+	}
+
+	if status := c.Query("status"); status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	if search := c.Query("search"); search != "" {
+		query = query.Where(
+			"caller_id IN (SELECT id FROM users WHERE username LIKE ? OR extension LIKE ?) OR callee_id IN (SELECT id FROM users WHERE username LIKE ? OR extension LIKE ?)",
+			"%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%",
+		)
+	}
+
+	var callLogs []models.CallLog
+	if err := query.Order("created_at DESC").Find(&callLogs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to fetch call logs",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"call_logs": callLogs,
+		"count":     len(callLogs),
 	})
 }
 

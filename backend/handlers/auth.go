@@ -46,6 +46,13 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	if !user.Enabled {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Account is disabled. Contact your administrator.",
+		})
+		return
+	}
+
 	now := time.Now()
 	database.GetDB().Model(&user).Updates(map[string]interface{}{
 		"status":     "online",
