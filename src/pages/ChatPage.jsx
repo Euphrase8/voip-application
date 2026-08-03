@@ -16,6 +16,8 @@ import {
   FiTrash2,
   FiX,
   FiChevronDown,
+  FiBell,
+  FiBellOff,
 } from "react-icons/fi";
 import { getMessages, getConversations, markAsRead, sendMessage, deleteMessage } from "../services/messages";
 import { getUsers } from "../services/users";
@@ -26,6 +28,7 @@ import {
   getConnectionStatus,
 } from "../services/websocketservice";
 import { getInitials, getAvatarColor, copyToClipboard } from "../utils/ui";
+import { playMessageSound, isChatSoundMuted, setChatSoundMuted } from "../utils/notificationSound";
 
 /* ------------------------------------------------------------------ */
 /* Constants & helpers                                                 */
@@ -94,6 +97,29 @@ const mergeMessage = (prev, incoming) => {
 
 const sortConversations = (list) =>
   list.slice().sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0));
+
+// Messages from the same sender within the same day and a short time window are
+// grouped into one visually-connected run (single timestamp, connected bubbles).
+const GROUP_GAP_MS = 10 * 60 * 1000;
+
+const groupMessages = (messages) => {
+  const groups = [];
+  for (const m of messages) {
+    const last = groups[groups.length - 1];
+    const prev = last ? last.items[last.items.length - 1] : null;
+    const sameSender = prev && prev.sender_id === m.sender_id;
+    const sameDay =
+      prev &&
+      new Date(m.created_at).toDateString() === new Date(prev.created_at).toDateString();
+    const gap = prev ? new Date(m.created_at) - new Date(prev.created_at) : Infinity;
+    if (sameSender && sameDay && gap <= GROUP_GAP_MS) {
+      last.items.push(m);
+    } else {
+      groups.push({ items: [m] });
+    }
+  }
+  return groups;
+};
 
 // Merge the "other" user object, never clobbering existing fields with undefined.
 const mergeOtherUser = (base, extra) => {
@@ -224,26 +250,35 @@ const formatFullDate = (dateStr) => {
 /* Small presentational components                                     */
 /* ------------------------------------------------------------------ */
 
-function Avatar({ user, size = "md", online }) {
+const PRESENCE_DOT = {
+  online: "bg-[#00a884]",
+  busy: "bg-amber-500",
+  away: "bg-orange-400",
+};
+
+function Avatar({ user, size = "md", presence = "offline", className = "" }) {
   const sizeCls =
     size === "lg"
       ? "w-12 h-12 text-base"
       : size === "sm"
         ? "w-9 h-9 text-xs"
-        : "w-11 h-11 text-sm";
+        : size === "xs"
+          ? "w-7 h-7 text-[9px]"
+          : "w-11 h-11 text-sm";
   const dotCls =
     size === "lg" ? "w-3.5 h-3.5 -bottom-0.5 -right-0.5 border-[2.5px]" : "w-3 h-3 -bottom-0 -right-0 border-2";
   const name = user?.username || user?.name || "?";
+  const dotColor = PRESENCE_DOT[presence];
   return (
-    <div className="relative flex-shrink-0">
+    <div className={`relative flex-shrink-0 ${className}`}>
       <div
         className={`${sizeCls} rounded-full flex items-center justify-center text-white font-semibold select-none ${getAvatarColor(name)}`}
       >
         {getInitials(name)}
       </div>
-      {online && (
+      {dotColor && (
         <span
-          className={`absolute ${dotCls} bg-[#00a884] rounded-full border-white dark:border-gray-900`}
+          className={`absolute ${dotCls} ${dotColor} rounded-full border-white dark:border-gray-900`}
         />
       )}
     </div>
@@ -290,7 +325,7 @@ const DateSeparator = memo(function DateSeparator({ dateStr, dark }) {
     else label = d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
   }
   return (
-    <div className="flex justify-center my-3">
+    <div className="flex justify-center my-4">
       <span
         className={`text-[12px] px-3 py-1 rounded-lg shadow-sm ${
           dark ? "bg-gray-800 text-gray-300" : "bg-white/70 text-gray-500"
@@ -302,33 +337,27 @@ const DateSeparator = memo(function DateSeparator({ dateStr, dark }) {
   );
 });
 
-const ConversationItem = memo(function ConversationItem({ conv, isSelected, online, typing, onClick, dark }) {
+const ConversationItem = memo(function ConversationItem({ conv, isSelected, presence, typing, onClick, dark }) {
   const u = conv.user || {};
   const name = u.username || u.name || `Ext ${u.extension}`;
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+      className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-150 relative ${
         isSelected
           ? dark
-            ? "bg-gray-700/80"
+            ? "bg-gray-700/70"
             : "bg-[#f0faf3]"
           : dark
             ? "hover:bg-gray-800"
-            : "hover:bg-gray-50"
+            : "hover:bg-gray-100"
       }`}
     >
-      <Avatar user={u} online={online} />
+      {isSelected && <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-[#00a884]" />}
+      <Avatar user={u} presence={presence} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-[15px] font-medium truncate">
-            {name}
-            {u.extension && (
-              <span className={`ml-1.5 text-xs font-normal ${dark ? "text-gray-500" : "text-gray-400"}`}>
-                {u.extension}
-              </span>
-            )}
-          </p>
+          <p className="text-[15px] font-semibold truncate">{name}</p>
           <span className={`text-[11px] flex-shrink-0 ${dark ? "text-gray-500" : "text-gray-400"}`}>
             {formatTime(conv.last_message_at)}
           </span>
@@ -387,13 +416,67 @@ const QuotedBlock = memo(function QuotedBlock({ replyTo, quoteName, dark, mine }
   );
 });
 
-const MessageBubble = memo(function MessageBubble({ msg, isMine, dark, status, myId, canDelete, onRetry, onMenu, onDelete }) {
+// Resolve the bubble corner radii for WhatsApp-style grouped messages.
+// `single`: isolated bubble, classic pointed corner.
+// `start`: first of a run – pointed corner on top, connects to the next.
+// `middle`: connected both sides (nearly square on the near edge).
+// `end`: last of a run – connects above, pointed corner + tail below.
+const bubbleRadius = (isMine, groupStyle) => {
+  if (isMine) {
+    switch (groupStyle) {
+      case "start":
+        return "rounded-tl-xl rounded-bl-xl rounded-tr-sm rounded-br-lg";
+      case "middle":
+        return "rounded-tl-xl rounded-bl-xl rounded-tr-[5px] rounded-br-[5px]";
+      case "end":
+        return "rounded-tl-xl rounded-bl-xl rounded-tr-[5px] rounded-br-sm";
+      default:
+        return "rounded-xl rounded-tr-sm";
+    }
+  }
+  switch (groupStyle) {
+    case "start":
+      return "rounded-tr-xl rounded-br-xl rounded-tl-sm rounded-bl-lg";
+    case "middle":
+      return "rounded-tr-xl rounded-br-xl rounded-tl-[5px] rounded-bl-[5px]";
+    case "end":
+      return "rounded-tr-xl rounded-br-xl rounded-tl-[5px] rounded-bl-sm";
+    default:
+      return "rounded-xl rounded-tl-sm";
+  }
+};
+
+const MessageBubble = memo(function MessageBubble({
+  msg,
+  isMine,
+  dark,
+  status,
+  myId,
+  canDelete,
+  onRetry,
+  onMenu,
+  onDelete,
+  groupStyle = "single",
+  showTime = true,
+  showAvatar = false,
+}) {
   const showQuote = msg.reply_to_id || msg.reply_to;
   const quoteName = { myId };
   const actionBtnCls =
     "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1.5 rounded-full text-gray-400 hover:bg-black/10 dark:hover:bg-white/10 self-center";
+  // Within a run of grouped bubbles the rows sit tight; at run boundaries we
+  // leave a gap so separate bubbles are visually distinct.
+  const rowMargin = groupStyle === "start" || groupStyle === "middle" ? "mb-[2px]" : "mb-2.5";
+  const bubbleBg = isMine
+    ? dark
+      ? "bg-[#005c4b]"
+      : "bg-[#d9fdd3]"
+    : dark
+      ? "bg-gray-700"
+      : "bg-white";
   return (
-    <div className={`group flex items-end ${isMine ? "justify-end" : "justify-start"} mb-[2px]`}>
+    <div className={`group flex items-end ${isMine ? "justify-end" : "justify-start"} ${rowMargin}`}>
+      {!isMine && showAvatar && <Avatar user={msg.sender} size="xs" className="mr-1.5 mb-0.5" />}
       <div className="flex items-end gap-0.5">
         {isMine && (
           <>
@@ -421,40 +504,45 @@ const MessageBubble = memo(function MessageBubble({ msg, isMine, dark, status, m
         )}
         <div
           onContextMenu={(e) => onMenu(msg, e)}
-          className={`relative max-w-[85%] sm:max-w-[75%] md:max-w-[70%] px-2.5 py-1.5 text-[14px] leading-relaxed shadow-sm animate-fade-in ${
-            isMine
-              ? dark
-                ? "bg-[#005c4b] text-gray-100 rounded-xl rounded-tr-sm"
-                : "bg-[#d9fdd3] text-gray-800 rounded-xl rounded-tr-sm"
-              : dark
-                ? "bg-gray-700 text-gray-100 rounded-xl rounded-tl-sm"
-                : "bg-white text-gray-800 rounded-xl rounded-tl-sm"
-          }`}
+          className={`relative max-w-[85%] sm:max-w-[75%] md:max-w-[70%] px-2.5 py-1.5 text-[14px] leading-relaxed shadow-sm animate-fade-in ${bubbleRadius(
+            isMine,
+            groupStyle
+          )} ${bubbleBg} ${isMine ? "text-gray-100 dark:text-gray-100" : dark ? "text-gray-100" : "text-gray-800"}`}
         >
           {showQuote && <QuotedBlock replyTo={msg.reply_to} quoteName={quoteName} dark={dark} mine={isMine} />}
-          <p className="whitespace-pre-wrap break-words pr-12">{msg.content}</p>
-          <div
-            className={`absolute bottom-1 right-2 flex items-center gap-1 ${
-              isMine ? (dark ? "text-gray-300" : "text-gray-500") : dark ? "text-gray-400" : "text-gray-400"
-            }`}
-          >
-            <span className="text-[10px]">{formatMsgTime(msg.created_at)}</span>
-            {isMine &&
-              (status === "failed" ? (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRetry(msg);
-                  }}
-                  title="Message failed. Tap to retry."
-                  className="text-red-300 hover:text-red-100 transition-colors"
-                >
-                  <FiRefreshCw className="w-3.5 h-3.5" />
-                </button>
-              ) : (
-                <MessageStatus status={status} />
-              ))}
-          </div>
+          <p className={`whitespace-pre-wrap break-words ${showTime ? "pr-12" : "pr-1"}`}>{msg.content}</p>
+          {showTime && (
+            <div
+              className={`absolute bottom-1 right-2 flex items-center gap-1 ${
+                isMine ? (dark ? "text-gray-300" : "text-gray-500") : dark ? "text-gray-400" : "text-gray-400"
+              }`}
+            >
+              <span className="text-[10px]">{formatMsgTime(msg.created_at)}</span>
+              {isMine &&
+                (status === "failed" ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRetry(msg);
+                    }}
+                    title="Message failed. Tap to retry."
+                    className="text-red-300 hover:text-red-100 transition-colors"
+                  >
+                    <FiRefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <MessageStatus status={status} />
+                ))}
+            </div>
+          )}
+          {/* WhatsApp-style tail on the last bubble of a group */}
+          {showTime && (
+            <span
+              className={`absolute bottom-[-2px] ${
+                isMine ? "right-[-1px]" : "left-[-1px]"
+              } w-[9px] h-[9px] rounded-[1px] rotate-45 ${bubbleBg}`}
+            />
+          )}
           {isMine && status === "failed" && (
             <div className="absolute -top-3 left-2 inline-flex items-center gap-1 text-red-500 dark:text-red-400 text-[10px] font-medium">
               <FiAlertTriangle className="w-3 h-3" /> Failed
@@ -591,7 +679,19 @@ function DeleteConfirmModal({ dark, deleting, onCancel, onConfirm }) {
   );
 }
 
-function ChatHeader({ user, online, typing, dark, onBack, onVoiceCall, onVideoCall }) {
+function ChatHeader({ user, presence, typing, dark, onBack, onVoiceCall, onVideoCall }) {
+  const presenceText = { online: "Online", busy: "Busy", away: "Away", offline: "Offline" }[presence] || "Offline";
+  const presenceDot = { online: "bg-[#00a884]", busy: "bg-amber-500", away: "bg-orange-400" }[presence] || "bg-gray-400";
+  const presenceTextCls =
+    presence === "online"
+      ? "text-[#00a884]"
+      : presence === "busy"
+        ? "text-amber-500"
+        : presence === "away"
+          ? "text-orange-400"
+          : dark
+            ? "text-gray-500"
+            : "text-gray-400";
   return (
     <div
       className={`px-4 py-2.5 flex items-center gap-3 border-b ${
@@ -601,7 +701,7 @@ function ChatHeader({ user, online, typing, dark, onBack, onVoiceCall, onVideoCa
       <button onClick={onBack} className="md:hidden p-1 -ml-1 text-gray-500 dark:text-gray-300" title="Back">
         <FiChevronLeft className="w-5 h-5" />
       </button>
-      <Avatar user={user} size="sm" online={online} />
+      <Avatar user={user} size="sm" presence={presence} />
       <div className="flex-1 min-w-0">
         <p className="font-semibold text-sm truncate">
           {user?.username || user?.name || `Ext ${user?.extension}`}
@@ -617,8 +717,9 @@ function ChatHeader({ user, online, typing, dark, onBack, onVoiceCall, onVideoCa
               <TypingDots colorClass="bg-[#00a884]" /> typing…
             </span>
           ) : (
-            <span className={online ? "text-green-500 font-medium" : dark ? "text-gray-500" : "text-gray-400"}>
-              {online ? "online" : "offline"}
+            <span className={`inline-flex items-center gap-1.5 font-medium ${presenceTextCls}`}>
+              <span className={`w-2 h-2 rounded-full ${presenceDot}`} />
+              {presenceText}
             </span>
           )}
         </div>
@@ -729,7 +830,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
   const [selectedUser, setSelectedUser] = useState(null);
   const [draft, setDraft] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
-  const [onlineUsers, setOnlineUsers] = useState(new Set());
+  const [presenceMap, setPresenceMap] = useState(new Map());
   const [typingMap, setTypingMap] = useState(new Map());
   const [showSidebar, setShowSidebar] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
@@ -742,6 +843,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
   const [menu, setMenu] = useState(null);
   const [infoTarget, setInfoTarget] = useState(null);
   const [toast, setToast] = useState(null);
+  const [soundMuted, setSoundMuted] = useState(() => isChatSoundMuted());
 
   const me = Number(localStorage.getItem("user_id") || 0);
   const myUsername = localStorage.getItem("username") || "";
@@ -757,6 +859,8 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
   const lastTypingSentRef = useRef(0);
   const messagesRef = useRef([]);
   const toastTimerRef = useRef(null);
+  const openRequestRef = useRef(0);
+  const prevWsConnectedRef = useRef(false);
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
@@ -794,14 +898,17 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     [me]
   );
 
-  const isOnline = useCallback(
+  // Presence is tracked per extension as a live map (online/busy/away), fed by
+  // the users list on load and by WebSocket status broadcasts afterwards.
+  const getPresence = useCallback(
     (user) => {
-      if (!user) return false;
-      if (user.extension && onlineUsers.has(user.extension)) return true;
-      if (user.is_online === true || user.status === "online") return true;
-      return false;
+      if (!user) return "offline";
+      if (user.extension && presenceMap.has(user.extension)) return presenceMap.get(user.extension);
+      if (user.status && user.status !== "" && user.status !== "offline") return user.status;
+      if (user.is_online === true) return "online";
+      return "offline";
     },
-    [onlineUsers]
+    [presenceMap]
   );
 
   const isTyping = useCallback((ext) => typingMap.has(ext), [typingMap]);
@@ -825,19 +932,20 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     try {
       const data = await getUsers();
       if (data.success) {
-        setOnlineUsers(
-          new Set(
-            (data.users || [])
-              .filter((u) => u.status === "online" || u.is_online === true)
-              .map((u) => u.extension)
-          )
-        );
+        const map = new Map();
+        (data.users || []).forEach((u) => {
+          if (u.extension && u.status && u.status !== "offline") map.set(u.extension, u.status);
+        });
+        setPresenceMap(map);
       }
     } catch (e) {}
   }, []);
 
   const openConversation = useCallback(async (user) => {
     if (!user || !user.id) return;
+    // Guard against stale responses: if the user quickly opens another chat
+    // before this request resolves, this response must be discarded.
+    const requestId = ++openRequestRef.current;
     selectedUserRef.current = user;
     setSelectedUser(user);
     setShowSidebar(false);
@@ -848,6 +956,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     forceScrollRef.current = true;
     try {
       const data = await getMessages(user.id);
+      if (openRequestRef.current !== requestId) return;
       const list = (data.messages || []).map((m) => ({
         ...m,
         key: `m-${m.id}`,
@@ -857,8 +966,10 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
       clearUnread(setConversations, user.id);
       markAsRead(user.id).catch(() => {});
     } catch (e) {
+      if (openRequestRef.current !== requestId) return;
       setMessages([]);
     } finally {
+      if (openRequestRef.current !== requestId) return;
       setLoadingMessages(false);
       forceScrollRef.current = true;
     }
@@ -941,6 +1052,10 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
             markAsRead(msg.sender_id).catch(() => {});
           }
           upsertConversationFromMessage(setConversations, msg, me, !isOpen);
+          // Audible cue when the incoming chat isn't on screen or the tab is hidden.
+          if (!isOpen || document.hidden) {
+            playMessageSound();
+          }
           break;
         }
         case "chat_message_sent": {
@@ -987,11 +1102,25 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
         }
         case "user_status_changed": {
           const ext = data.from || data.extension;
+          const status = data.status;
           if (ext) {
-            setOnlineUsers((prev) => {
-              const next = new Set(prev);
-              if (data.status === "online") next.add(ext);
-              else next.delete(ext);
+            setPresenceMap((prev) => {
+              const next = new Map(prev);
+              if (status === "offline") next.delete(ext);
+              else next.set(ext, status);
+              return next;
+            });
+          }
+          break;
+        }
+        case "user_status": {
+          const ext = data.from || data.extension;
+          const status = data.status;
+          if (ext && status) {
+            setPresenceMap((prev) => {
+              const next = new Map(prev);
+              if (status === "offline") next.delete(ext);
+              else next.set(ext, status);
               return next;
             });
           }
@@ -1012,14 +1141,27 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
   }, [loadConversations, fetchOnlineUsers]);
 
   useEffect(() => {
-    const unsubStatus = addConnectionStatusListener(({ connected }) => setWsConnected(connected));
-    setWsConnected(getConnectionStatus().isConnected);
+    const unsubStatus = addConnectionStatusListener(({ connected }) => {
+      const wasConnected = prevWsConnectedRef.current;
+      prevWsConnectedRef.current = connected;
+      setWsConnected(connected);
+      // After a reconnect, catch up on anything that arrived while the socket
+      // was down: refresh the conversation list and re-open the active chat.
+      if (connected && !wasConnected) {
+        loadConversations();
+        const openUser = selectedUserRef.current;
+        if (openUser && openUser.id) openConversation(openUser);
+      }
+    });
+    const initialConnected = getConnectionStatus().isConnected;
+    prevWsConnectedRef.current = initialConnected;
+    setWsConnected(initialConnected);
     const unsubMsg = addMessageListener(handleWSEvent);
     return () => {
       unsubStatus();
       unsubMsg();
     };
-  }, [handleWSEvent]);
+  }, [handleWSEvent, loadConversations, openConversation]);
 
   // Open a conversation passed from the Contacts tab.
   useEffect(() => {
@@ -1061,6 +1203,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
       _tempId: cmid,
       _status: "sending",
       id: null,
+      client_message_id: cmid,
       sender_id: me,
       receiver_id: user.id,
       content,
@@ -1199,12 +1342,8 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       setMessages(next);
       updateConversationPreview(setConversations, otherId, latest?.content || "", latest?.created_at || null);
-      // Backend also broadcasts chat_message_deleted to both users; this
-      // explicit send is a belt-and-braces fallback for any routing hiccup.
-      sendWebSocketMessage({
-        type: "chat_message_deleted",
-        data: { message_id: msg.id, sender_id: msg.sender_id, receiver_id: msg.receiver_id },
-      }).catch(() => {});
+      // The backend broadcasts `chat_message_deleted` to both users in real
+      // time, so no client-side fallback event is needed here.
     } catch (e) {
       showToast("Couldn't delete the message");
     } finally {
@@ -1250,6 +1389,8 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     );
   });
 
+  const messageGroups = groupMessages(messages);
+
   const selectedTyping = selectedUser && isTyping(selectedUser.extension);
 
   const replyName = replyTarget
@@ -1282,23 +1423,43 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
           >
             <div className="flex items-center justify-between mb-2 px-1">
               <h2 className="text-lg font-bold">Chats</h2>
-              <span className="text-xs text-gray-400">
-                {conversations.length} conversation{conversations.length !== 1 ? "s" : ""}
-              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setSoundMuted(setChatSoundMuted(!isChatSoundMuted()))}
+                  className={`p-2 rounded-full transition-colors ${
+                    darkMode ? "hover:bg-gray-700" : "hover:bg-gray-200"
+                  } ${soundMuted ? "text-[#00a884]" : "text-gray-400 dark:text-gray-500"}`}
+                  title={soundMuted ? "Unmute message sounds" : "Mute message sounds"}
+                >
+                  {soundMuted ? <FiBellOff className="w-[18px] h-[18px]" /> : <FiBell className="w-[18px] h-[18px]" />}
+                </button>
+                <span className="text-xs text-gray-400 mr-1">
+                  {conversations.length} conversation{conversations.length !== 1 ? "s" : ""}
+                </span>
+              </div>
             </div>
             <div className="relative">
               <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-[18px] h-[18px] text-gray-400" />
               <input
                 type="text"
-                placeholder="Search by name, username or extension..."
+                placeholder="Search conversations..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm outline-none transition-colors ${
+                className={`w-full pl-10 pr-10 py-2.5 rounded-xl text-sm outline-none transition-colors ${
                   darkMode
                     ? "bg-gray-900 text-white placeholder-gray-500 border border-gray-700 focus:border-[#00a884]"
                     : "bg-gray-100 text-gray-900 border border-transparent focus:border-[#00a884]"
                 }`}
               />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                  title="Clear search"
+                >
+                  <FiX className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -1318,7 +1479,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
                   key={conv.conversation_id || conv.user.id}
                   conv={conv}
                   isSelected={String(selectedUser?.id) === String(conv.user.id)}
-                  online={isOnline(conv.user)}
+                  presence={getPresence(conv.user)}
                   typing={isTyping(conv.user.extension)}
                   onClick={() => openConversation(conv.user)}
                   dark={darkMode}
@@ -1334,7 +1495,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
             <>
               <ChatHeader
                 user={selectedUser}
-                online={isOnline(selectedUser)}
+                presence={getPresence(selectedUser)}
                 typing={selectedTyping}
                 dark={darkMode}
                 onBack={handleBack}
@@ -1364,31 +1525,49 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
                       </div>
                     </div>
                   ) : (
-                    <>
-                      {messages.map((msg, idx) => {
-                        const prev = messages[idx - 1];
-                        const showDate =
-                          !prev ||
-                          new Date(msg.created_at).toDateString() !==
-                            new Date(prev.created_at).toDateString();
-                        return (
-                          <div key={msg.key || msg._tempId || msg.id}>
-                            {showDate && <DateSeparator dateStr={msg.created_at} dark={darkMode} />}
-                            <MessageBubble
-                              msg={msg}
-                              isMine={isMyMessage(msg)}
-                              dark={darkMode}
-                              status={deriveStatus(msg)}
-                              myId={me}
-                              canDelete={!!msg.id && (isMyMessage(msg) || myRole === "admin")}
-                              onRetry={retryMessage}
-                              onMenu={openMessageMenu}
-                              onDelete={(m) => setDeleteTarget(m)}
-                            />
-                          </div>
-                        );
-                      })}
-                    </>
+                    messageGroups.map((group, gi) => {
+                      const prevMsg =
+                        gi > 0 ? messageGroups[gi - 1].items[messageGroups[gi - 1].items.length - 1] : null;
+                      const first = group.items[0];
+                      const showDate =
+                        !prevMsg ||
+                        new Date(first.created_at).toDateString() !==
+                          new Date(prevMsg.created_at).toDateString();
+                      const groupMine = isMyMessage(first);
+                      return (
+                        <div key={`g-${gi}`}>
+                          {showDate && <DateSeparator dateStr={first.created_at} dark={darkMode} />}
+                          {group.items.map((msg, mi) => {
+                            const isLast = mi === group.items.length - 1;
+                            const groupStyle =
+                              group.items.length === 1
+                                ? "single"
+                                : mi === 0
+                                  ? "start"
+                                  : isLast
+                                    ? "end"
+                                    : "middle";
+                            return (
+                              <MessageBubble
+                                key={msg.key || msg._tempId || msg.id}
+                                msg={msg}
+                                isMine={groupMine}
+                                dark={darkMode}
+                                status={deriveStatus(msg)}
+                                myId={me}
+                                canDelete={!!msg.id && (isMyMessage(msg) || myRole === "admin")}
+                                onRetry={retryMessage}
+                                onMenu={openMessageMenu}
+                                onDelete={(m) => setDeleteTarget(m)}
+                                groupStyle={groupStyle}
+                                showTime={isLast}
+                                showAvatar={!groupMine && isLast}
+                              />
+                            );
+                          })}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
 
@@ -1435,13 +1614,15 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
 
               {/* Composer */}
               <div
-                className={`px-4 py-3 border-t ${
+                className={`px-3 md:px-4 py-3 border-t ${
                   darkMode ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"
                 }`}
               >
                 <div
-                  className={`flex items-end gap-2 rounded-xl px-3 py-1.5 border ${
-                    darkMode ? "bg-gray-900 border-gray-700" : "bg-white border-gray-200"
+                  className={`flex items-end gap-2 rounded-2xl pl-3.5 pr-1.5 py-1.5 border focus-within:ring-2 focus-within:ring-[#00a884]/30 transition-shadow ${
+                    darkMode
+                      ? "bg-gray-900 border-gray-700"
+                      : "bg-white border-gray-200 shadow-sm"
                   }`}
                 >
                   <textarea
@@ -1459,7 +1640,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
                   <button
                     onClick={handleSend}
                     disabled={!draft.trim()}
-                    className="p-2.5 mb-0.5 rounded-full bg-[#00a884] text-white hover:bg-[#008f70] disabled:opacity-30 disabled:cursor-not-allowed transition-colors shadow-sm"
+                    className="p-2.5 rounded-full bg-[#00a884] text-white hover:bg-[#008f70] disabled:opacity-30 disabled:cursor-not-allowed transition-colors shadow-md hover:shadow-lg active:scale-95"
                     title="Send"
                   >
                     <FiSend className="w-[18px] h-[18px]" />
