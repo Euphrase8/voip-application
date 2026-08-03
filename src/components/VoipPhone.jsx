@@ -3,6 +3,7 @@ import { Button, TextField, Tooltip } from '@mui/material';
 import { Call, CallEnd } from '@mui/icons-material';
 import { hangup } from '../services/hang';
 import { sendWebSocketMessage } from '../services/websocketservice';
+import { getToken } from '../services/login';
 import JsSIP from 'jssip';
 import { CONFIG } from '../services/config';
 import sipManager from '../services/sipManager';
@@ -39,7 +40,9 @@ const VoipPhone = ({
 
   const setupWebSocket = useCallback(() => {
     if (!extension || incomingStream) return; // Skip for incoming calls
-    const wsUrl = `${CONFIG.WS_URL}?extension=${encodeURIComponent(extension)}`;
+    const token = getToken();
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    const wsUrl = `${CONFIG.WS_URL}?extension=${encodeURIComponent(extension)}${tokenParam}`;
     wsRef.current = new WebSocket(wsUrl);
 
     wsRef.current.onopen = () => {

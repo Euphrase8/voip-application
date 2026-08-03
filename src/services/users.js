@@ -5,6 +5,12 @@ import CONFIG from './config';
 const API_URL = CONFIG.API_URL;
 const WS_URL = CONFIG.WS_URL;
 
+const getWsUrlWithToken = (extension) => {
+  const token = getToken();
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+  return `${WS_URL}?extension=${encodeURIComponent(extension)}${tokenParam}`;
+};
+
 export const getUsers = async () => {
   try {
     const token = getToken();
@@ -42,7 +48,7 @@ export const getUsers = async () => {
 };
 
 export const setupWebSocket = (extension, onIncomingCall, onError) => {
-  const ws = new WebSocket(`${WS_URL}?extension=${extension}`);
+  const ws = new WebSocket(getWsUrlWithToken(extension));
 
   ws.onopen = () => {
     console.log(`WebSocket connected for user: ${extension}`);

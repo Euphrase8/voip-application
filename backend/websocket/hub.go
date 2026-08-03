@@ -28,6 +28,9 @@ type Hub struct {
 	// Callback for when user disconnects (to update database)
 	OnUserDisconnect func(extension string) error
 
+	// Callback for when the first client of an extension connects (presence + delivery)
+	OnUserConnect func(extension string)
+
 	// Tracks closed send channels to prevent double-close panics
 	closedChannels map[*Client]bool
 	closedMu       sync.Mutex
@@ -99,12 +102,19 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mutex.Lock()
 			h.clients[client] = true
+			firstForExtension := false
 			if client.Extension != "" {
-				h.extensionClients[client.Extension] = append(h.extensionClients[client.Extension], client)
+				clients := h.extensionClients[client.Extension]
+				firstForExtension = len(clients) == 0
+				h.extensionClients[client.Extension] = append(clients, client)
 				log.Printf("Client registered: %s (extension: %s) - Total clients for extension: %d",
 					client.ID, client.Extension, len(h.extensionClients[client.Extension]))
 			}
 			h.mutex.Unlock()
+
+			if firstForExtension && h.OnUserConnect != nil {
+				go h.OnUserConnect(client.Extension)
+			}
 
 			// Send welcome message asynchronously so we don't block registration
 			welcomeMsg := Message{

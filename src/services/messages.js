@@ -15,8 +15,11 @@ const uploadHeaders = () => ({
   },
 });
 
-export const sendMessage = async (receiverId, content, msgType = 'text') => {
-  const res = await axios.post(`${API_URL}/protected/messages/send`, { receiver_id: receiverId, content, msg_type: msgType }, authHeaders());
+export const sendMessage = async (receiverId, content, clientMessageId = null, msgType = 'text', replyToId = null) => {
+  const body = { receiver_id: receiverId, content, msg_type: msgType };
+  if (clientMessageId) body.client_message_id = clientMessageId;
+  if (replyToId) body.reply_to_id = replyToId;
+  const res = await axios.post(`${API_URL}/protected/messages/send`, body, authHeaders());
   return res.data;
 };
 
@@ -34,7 +37,12 @@ export const getVoiceMessageAudioUrl = (messageId) => {
 };
 
 export const getMessages = async (userId) => {
-  const res = await axios.get(`${API_URL}/protected/messages/${userId}`, authHeaders());
+  const res = await axios.get(`${API_URL}/protected/messages/${userId}?limit=100`, authHeaders());
+  return res.data;
+};
+
+export const deleteMessage = async (messageId) => {
+  const res = await axios.delete(`${API_URL}/protected/messages/${messageId}`, authHeaders());
   return res.data;
 };
 

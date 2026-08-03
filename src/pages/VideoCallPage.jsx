@@ -229,6 +229,9 @@ const VideoCallActive = ({ darkMode, contact, onEndCall }) => {
           case "webrtc_call_ended":
             handleRemoteEnded();
             break;
+          case "webrtc_call_rejected":
+            handleRemoteRejected();
+            break;
           default:
             break;
         }
@@ -389,6 +392,12 @@ const VideoCallActive = ({ darkMode, contact, onEndCall }) => {
 
   const handleRemoteEnded = () => {
     toast("Video call ended", { duration: 3000 });
+    cleanup();
+    if (onEndCall) onEndCall();
+  };
+
+  const handleRemoteRejected = () => {
+    toast.error("Call rejected", { duration: 3000 });
     cleanup();
     if (onEndCall) onEndCall();
   };

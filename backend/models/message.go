@@ -2,23 +2,30 @@ package models
 
 import (
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type Message struct {
-	ID         uint       `json:"id" gorm:"primaryKey"`
-	SenderID   uint       `json:"sender_id" gorm:"index;not null"`
-	ReceiverID uint       `json:"receiver_id" gorm:"index;not null"`
-	Content    string     `json:"content" gorm:"type:text;not null"`
-	MsgType    string     `json:"msg_type" gorm:"default:text"` // text, image, file, voice
-	FilePath   string     `json:"file_path,omitempty"`
-	FileName   string     `json:"file_name,omitempty"`
-	FileSize   int64      `json:"file_size,omitempty"`
-	Duration   int        `json:"duration,omitempty"`             // seconds (for voice messages)
-	IsRead     bool       `json:"is_read" gorm:"default:false"`
-	ReadAt     *time.Time `json:"read_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	Sender     User       `json:"sender" gorm:"foreignKey:SenderID"`
-	Receiver   User       `json:"receiver" gorm:"foreignKey:ReceiverID"`
+	ID              uint           `json:"id" gorm:"primaryKey"`
+	ClientMessageID string         `json:"client_message_id,omitempty" gorm:"type:varchar(128)"`
+	SenderID        uint           `json:"sender_id" gorm:"index;not null"`
+	ReceiverID      uint           `json:"receiver_id" gorm:"index;not null"`
+	Content         string         `json:"content" gorm:"type:text;not null"`
+	MsgType         string         `json:"msg_type" gorm:"default:text"` // text, image, file, voice
+	FilePath        string         `json:"file_path,omitempty"`
+	FileName        string         `json:"file_name,omitempty"`
+	FileSize        int64          `json:"file_size,omitempty"`
+	Duration        int            `json:"duration,omitempty"` // seconds (for voice messages)
+	IsRead          bool           `json:"is_read" gorm:"default:false"`
+	ReadAt          *time.Time     `json:"read_at,omitempty"`
+	DeliveredAt     *time.Time     `json:"delivered_at,omitempty"`
+	ReplyToID       *uint          `json:"reply_to_id,omitempty" gorm:"index"` // parent message this message replies to
+	ReplyTo         *Message       `json:"reply_to,omitempty" gorm:"foreignKey:ReplyToID"`
+	CreatedAt       time.Time      `json:"created_at"`
+	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"` // soft delete; deleted messages are excluded from all queries
+	Sender          User           `json:"sender" gorm:"foreignKey:SenderID"`
+	Receiver        User           `json:"receiver" gorm:"foreignKey:ReceiverID"`
 }
 
 type ChatConversation struct {
@@ -72,9 +79,11 @@ type TypingIndicator struct {
 }
 
 type SendMessageRequest struct {
-	ReceiverID uint   `json:"receiver_id" binding:"required"`
-	Content    string `json:"content" binding:"required"`
-	MsgType    string `json:"msg_type"`
+	ReceiverID      uint   `json:"receiver_id" binding:"required"`
+	Content         string `json:"content" binding:"required"`
+	MsgType         string `json:"msg_type"`
+	ClientMessageID string `json:"client_message_id"`
+	ReplyToID       uint   `json:"reply_to_id"`
 }
 
 type SendGroupMessageRequest struct {

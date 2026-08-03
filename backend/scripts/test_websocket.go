@@ -23,11 +23,15 @@ type Message struct {
 
 func main() {
 	if len(os.Args) < 3 {
-		log.Fatal("Usage: go run test_websocket.go <server_url> <extension>")
+		log.Fatal("Usage: go run test_websocket.go <server_url> <extension> [token]")
 	}
 
 	serverURL := os.Args[1]
 	extension := os.Args[2]
+	token := ""
+	if len(os.Args) > 3 {
+		token = os.Args[3]
+	}
 
 	// Parse the server URL and create WebSocket URL
 	u, err := url.Parse(serverURL)
@@ -46,6 +50,9 @@ func main() {
 	u.Path = "/ws"
 	q := u.Query()
 	q.Set("extension", extension)
+	if token != "" {
+		q.Set("token", token)
+	}
 	u.RawQuery = q.Encode()
 
 	log.Printf("Connecting to WebSocket: %s", u.String())

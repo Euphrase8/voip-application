@@ -1,6 +1,7 @@
 param(
     [string]$Distro = "Ubuntu-24.04",
-    [switch]$StartBackend
+    [switch]$StartBackend,
+    [switch]$KeepAlive
 )
 
 $logFile = "$env:TEMP\wsl-asterisk-startup.log"
@@ -49,6 +50,21 @@ if ($StartBackend) {
     Log "Starting backend..."
     $backendProcess = Start-Process -NoNewWindow -FilePath "go" -ArgumentList "run ." -WorkingDirectory $backendDir -PassThru
     Log "Backend started (PID: $($backendProcess.Id))"
+}
+
+# 5. Optional keep-alive session: WSL terminates the VM when the last
+#    session closes, which kills Asterisk. A persistent `wsl sleep` process
+#    holds a session open so the VM (and Asterisk) stay alive indefinitely.
+if ($KeepAlive) {
+    Log "Starting WSL keep-alive session..."
+    $existing = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'wsl.*sleep.*infinity' }
+    if ($existing) {
+        Log "Keep-alive already running (PID: $($existing.ProcessId -join ', '))"
+    } else {
+        $keepAlive = Start-Process -WindowStyle Hidden -FilePath "wsl" `
+            -ArgumentList "-d", "$Distro", "-u", "root", "--", "sleep", "infinity" -PassThru
+        Log "Keep-alive started (PID: $($keepAlive.Id))"
+    }
 }
 
 Log "=== Startup complete ==="

@@ -15,17 +15,13 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		// Try Authorization header first
 		authHeader := c.GetHeader("Authorization")
-		if authHeader != "" {
-			if !strings.HasPrefix(authHeader, "Bearer ") {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error": "Invalid authorization header format",
-				})
-				c.Abort()
-				return
-		} else if c.Request.Method == "GET" {
-			tokenString = c.Query("token")
-		}
+		if strings.HasPrefix(authHeader, "Bearer ") {
 			tokenString = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+
+		// Fallback to token query param for GET requests
+		if tokenString == "" && c.Request.Method == "GET" {
+			tokenString = c.Query("token")
 		}
 
 		if tokenString == "" {

@@ -73,10 +73,19 @@ func GetOnlineUsers(c *gin.Context) {
 	})
 }
 
-// GetAllUsers returns all users (accessible to all authenticated users)
+// GetAllUsers returns all users except the authenticated user (accessible to all authenticated users)
 func GetAllUsers(c *gin.Context) {
+	userID, _, _, _, ok := middleware.GetUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "User not authenticated",
+		})
+		return
+	}
+
 	var users []models.User
-	if err := database.GetDB().Find(&users).Error; err != nil {
+	// Never return the authenticated user in contact list responses
+	if err := database.GetDB().Where("id != ?", userID).Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch users",
 		})

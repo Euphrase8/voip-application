@@ -12,12 +12,25 @@ const RECONNECT_INTERVAL = 5000;
 // Event listener system for WebSocket messages
 const messageListeners = new Set();
 
+// Event listener system for connection status changes (open/close)
+const connectionStatusListeners = new Set();
+
 const notifyListeners = (event) => {
   messageListeners.forEach(listener => {
     try {
       listener(event);
     } catch (err) {
       console.error('[websocketservice] Listener error:', err);
+    }
+  });
+};
+
+const notifyConnectionStatus = (connected) => {
+  connectionStatusListeners.forEach(listener => {
+    try {
+      listener({ connected });
+    } catch (err) {
+      console.error('[websocketservice] Connection listener error:', err);
     }
   });
 };
@@ -29,6 +42,11 @@ export const addMessageListener = (listener) => {
 
 export const removeMessageListener = (listener) => {
   messageListeners.delete(listener);
+};
+
+export const addConnectionStatusListener = (listener) => {
+  connectionStatusListeners.add(listener);
+  return () => connectionStatusListeners.delete(listener);
 };
 
 const setupSocketHandlers = () => {
@@ -45,6 +63,7 @@ const setupSocketHandlers = () => {
       clearTimeout(reconnectTimeout);
       reconnectTimeout = null;
     }
+    notifyConnectionStatus(true);
   };
 
   socket.onerror = (err) => {
@@ -53,6 +72,7 @@ const setupSocketHandlers = () => {
 
   socket.onclose = (event) => {
     console.warn(`[websocketservice] WebSocket closed with code ${event.code}: ${event.reason || 'No reason provided'}`);
+    notifyConnectionStatus(false);
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       reconnectAttempts += 1;
       console.log(`[websocketservice] Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}) in ${RECONNECT_INTERVAL}ms...`);

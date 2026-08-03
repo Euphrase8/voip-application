@@ -1,161 +1,646 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { FiSend, FiChevronLeft, FiSearch, FiCheck, FiClock, FiPhone, FiVideo, FiMoreVertical } from "react-icons/fi";
-import { getMessages, getConversations, getUnreadCount, markAsRead, sendMessage } from "../services/messages";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
+import {
+  FiSend,
+  FiChevronLeft,
+  FiSearch,
+  FiCheck,
+  FiClock,
+  FiPhone,
+  FiVideo,
+  FiRefreshCw,
+  FiArrowDown,
+  FiAlertTriangle,
+  FiCornerUpLeft,
+  FiCopy,
+  FiInfo,
+  FiTrash2,
+  FiX,
+  FiChevronDown,
+} from "react-icons/fi";
+import { getMessages, getConversations, markAsRead, sendMessage, deleteMessage } from "../services/messages";
 import { getUsers } from "../services/users";
-import { addMessageListener } from "../services/websocketservice";
+import {
+  addMessageListener,
+  addConnectionStatusListener,
+  sendWebSocketMessage,
+  getConnectionStatus,
+} from "../services/websocketservice";
+import { getInitials, getAvatarColor, copyToClipboard } from "../utils/ui";
 
-const COLORS = [
-  "bg-emerald-500", "bg-blue-500", "bg-violet-500", "bg-orange-500",
-  "bg-pink-500", "bg-teal-500", "bg-indigo-500", "bg-rose-500",
-  "bg-cyan-500", "bg-amber-500"
-];
+/* ------------------------------------------------------------------ */
+/* Constants & helpers                                                 */
+/* ------------------------------------------------------------------ */
 
-function getColor(name) {
-  let hash = 0;
-  for (let i = 0; i < (name || "").length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return COLORS[Math.abs(hash) % COLORS.length];
-}
+const genClientMessageId = () => {
+  if (typeof window !== "undefined" && window.crypto && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `cmid-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
-function getInitials(name) {
-  return (name || "?").charAt(0).toUpperCase();
-}
+// WhatsApp-style message wallpaper (subtle dot pattern)
+const makePattern = (fill) =>
+  "url(\"data:image/svg+xml," +
+  encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'><g fill='${fill}' fill-opacity='0.5'><circle cx='18' cy='18' r='2.4'/><circle cx='63' cy='18' r='2.4'/><circle cx='108' cy='18' r='2.4'/><circle cx='153' cy='18' r='2.4'/><circle cx='40' cy='63' r='2.4'/><circle cx='85' cy='63' r='2.4'/><circle cx='130' cy='63' r='2.4'/><circle cx='18' cy='108' r='2.4'/><circle cx='63' cy='108' r='2.4'/><circle cx='108' cy='108' r='2.4'/><circle cx='153' cy='108' r='2.4'/><circle cx='40' cy='153' r='2.4'/><circle cx='85' cy='153' r='2.4'/><circle cx='130' cy='153' r='2.4'/></g></svg>`
+  ) +
+  "\")";
 
-function formatTime(dateStr) {
+const CHAT_BG_LIGHT = makePattern("#cfc8b8");
+const CHAT_BG_DARK = makePattern("#263238");
+
+// Message status is derived from the server state when available,
+// otherwise from the client-side optimistic state.
+const deriveStatus = (m) => {
+  if (m && (m._status === "failed" || m._status === "sending")) return m._status;
+  if (m && m.is_read) return "read";
+  if (m && m.delivered_at) return "delivered";
+  if (!m || !m.id) return "sending";
+  return "sent";
+};
+
+const STATUS_LABELS = {
+  sending: "Sending",
+  sent: "Sent",
+  delivered: "Delivered",
+  read: "Read",
+  failed: "Failed",
+};
+
+// Merge an incoming/acknowledged message into the list, deduplicating by
+// stable key, server id or client_message_id so messages never appear twice.
+const mergeMessage = (prev, incoming) => {
+  const incomingKey = incoming.key;
+  const idx = prev.findIndex(
+    (m) =>
+      (incomingKey && m.key === incomingKey) ||
+      (incoming.id && m.id && String(m.id) === String(incoming.id)) ||
+      (incoming.client_message_id && m.client_message_id === incoming.client_message_id)
+  );
+  if (idx === -1) {
+    return [...prev, incoming];
+  }
+  const existing = prev[idx];
+  const merged = {
+    ...existing,
+    ...incoming,
+    key: existing.key || incomingKey,
+  };
+  merged._status = deriveStatus(merged);
+  const next = prev.slice();
+  next[idx] = merged;
+  return next;
+};
+
+const sortConversations = (list) =>
+  list.slice().sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0));
+
+// Merge the "other" user object, never clobbering existing fields with undefined.
+const mergeOtherUser = (base, extra) => {
+  const out = { ...base };
+  if (extra && extra.id !== undefined) out.id = extra.id;
+  ["username", "name", "extension", "email", "status", "role", "is_online", "avatar", "profile_image"].forEach((k) => {
+    if (extra && extra[k] !== undefined && extra[k] !== null && extra[k] !== "") out[k] = extra[k];
+  });
+  return out;
+};
+
+const setMsgStatus = (setMessages, messageId, status) => {
+  setMessages((prev) =>
+    prev.map((m) => (String(m.id) === String(messageId) ? { ...m, _status: status } : m))
+  );
+};
+
+const markAllDeliveredTo = (setMessages, me, receiverId) => {
+  setMessages((prev) =>
+    prev.map((m) => {
+      if (
+        String(m.sender_id) === String(me) &&
+        String(m.receiver_id) === String(receiverId) &&
+        m._status !== "read"
+      ) {
+        return { ...m, _status: m.is_read ? "read" : "delivered", delivered_at: m.delivered_at || m.created_at };
+      }
+      return m;
+    })
+  );
+};
+
+const markReadBy = (setMessages, me, readerId) => {
+  setMessages((prev) =>
+    prev.map((m) => {
+      if (String(m.sender_id) === String(me) && String(m.receiver_id) === String(readerId)) {
+        return { ...m, is_read: true, _status: "read" };
+      }
+      return m;
+    })
+  );
+};
+
+const clearUnread = (setConversations, userId) => {
+  setConversations((prev) =>
+    prev.map((c) => (String(c.user.id) === String(userId) ? { ...c, unread_count: 0 } : c))
+  );
+};
+
+// Update the conversation list when a message is created/received.
+const upsertConversationFromMessage = (setConversations, msg, me, incrementUnread) => {
+  const other =
+    String(msg.sender_id) === String(me)
+      ? { id: msg.receiver_id, ...(msg.receiver || {}) }
+      : { id: msg.sender_id, ...(msg.sender || {}) };
+
+  setConversations((prev) => {
+    let found = false;
+    const next = prev.map((c) => {
+      if (String(c.user.id) === String(other.id)) {
+        found = true;
+        const unread = incrementUnread ? (c.unread_count || 0) + 1 : c.unread_count || 0;
+        return {
+          ...c,
+          user: mergeOtherUser(c.user, other),
+          last_message: msg.content,
+          last_message_at: msg.created_at,
+          unread_count: unread,
+        };
+      }
+      return c;
+    });
+    if (!found) {
+      next.push({
+        conversation_id: other.id,
+        user: mergeOtherUser({ id: other.id }, other),
+        last_message: msg.content,
+        last_message_at: msg.created_at,
+        unread_count: incrementUnread ? 1 : 0,
+      });
+    }
+    return sortConversations(next);
+  });
+};
+
+// Set a conversation's preview text/timestamp (used after a message is deleted).
+const updateConversationPreview = (setConversations, otherUserId, lastMessage, lastMessageAt) => {
+  setConversations((prev) =>
+    sortConversations(
+      prev.map((c) =>
+        String(c.user.id) === String(otherUserId)
+          ? { ...c, last_message: lastMessage || "", last_message_at: lastMessageAt || null }
+          : c
+      )
+    )
+  );
+};
+
+const formatTime = (dateStr) => {
   if (!dateStr) return "";
   const d = new Date(dateStr);
   const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  if (isToday) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
   const yesterday = new Date(Date.now() - 86400000);
   if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
+};
 
-function formatMsgTime(dateStr) {
+const formatMsgTime = (dateStr) => {
   if (!dateStr) return "";
   return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const formatFullDate = (dateStr) => {
+  if (!dateStr) return "";
+  return new Date(dateStr).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+/* ------------------------------------------------------------------ */
+/* Small presentational components                                     */
+/* ------------------------------------------------------------------ */
+
+function Avatar({ user, size = "md", online }) {
+  const sizeCls =
+    size === "lg"
+      ? "w-12 h-12 text-base"
+      : size === "sm"
+        ? "w-9 h-9 text-xs"
+        : "w-11 h-11 text-sm";
+  const dotCls =
+    size === "lg" ? "w-3.5 h-3.5 -bottom-0.5 -right-0.5 border-[2.5px]" : "w-3 h-3 -bottom-0 -right-0 border-2";
+  const name = user?.username || user?.name || "?";
+  return (
+    <div className="relative flex-shrink-0">
+      <div
+        className={`${sizeCls} rounded-full flex items-center justify-center text-white font-semibold select-none ${getAvatarColor(name)}`}
+      >
+        {getInitials(name)}
+      </div>
+      {online && (
+        <span
+          className={`absolute ${dotCls} bg-[#00a884] rounded-full border-white dark:border-gray-900`}
+        />
+      )}
+    </div>
+  );
 }
 
-function ChatDateSeparator({ dateStr, dark }) {
+const MessageStatus = ({ status }) => {
+  if (status === "sending") return <FiClock className="w-3.5 h-3.5" />;
+  if (status === "read") {
+    return (
+      <span className="inline-flex items-center">
+        <FiCheck className="w-3.5 h-3.5 -mr-[3px] text-[#53bdeb]" />
+        <FiCheck className="w-3.5 h-3.5 text-[#53bdeb]" />
+      </span>
+    );
+  }
+  if (status === "delivered") {
+    return (
+      <span className="inline-flex items-center">
+        <FiCheck className="w-3.5 h-3.5 -mr-[3px]" />
+        <FiCheck className="w-3.5 h-3.5" />
+      </span>
+    );
+  }
+  return <FiCheck className="w-3.5 h-3.5" />;
+};
+
+const TypingDots = ({ colorClass }) => (
+  <span className="inline-flex items-center gap-[3px]">
+    <span className={`w-1.5 h-1.5 rounded-full ${colorClass} animate-bounce`} />
+    <span className={`w-1.5 h-1.5 rounded-full ${colorClass} animate-bounce`} style={{ animationDelay: "150ms" }} />
+    <span className={`w-1.5 h-1.5 rounded-full ${colorClass} animate-bounce`} style={{ animationDelay: "300ms" }} />
+  </span>
+);
+
+const DateSeparator = memo(function DateSeparator({ dateStr, dark }) {
   const d = new Date(dateStr);
   const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  const yesterday = new Date(Date.now() - 86400000);
   let label;
-  if (isToday) label = "Today";
-  else if (d.toDateString() === yesterday.toDateString()) label = "Yesterday";
-  else label = d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
-
+  if (d.toDateString() === now.toDateString()) label = "Today";
+  else {
+    const yesterday = new Date(Date.now() - 86400000);
+    if (d.toDateString() === yesterday.toDateString()) label = "Yesterday";
+    else label = d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+  }
   return (
     <div className="flex justify-center my-3">
-      <span className={`text-[12px] px-3 py-1 rounded-lg shadow-sm ${dark ? "bg-gray-800 text-gray-300" : "bg-white/70 text-gray-500"}`}>
+      <span
+        className={`text-[12px] px-3 py-1 rounded-lg shadow-sm ${
+          dark ? "bg-gray-800 text-gray-300" : "bg-white/70 text-gray-500"
+        }`}
+      >
         {label}
       </span>
     </div>
   );
-}
+});
 
-function ConversationItem({ conv, isSelected, online, onClick, dark }) {
-  const u = conv.user;
+const ConversationItem = memo(function ConversationItem({ conv, isSelected, online, typing, onClick, dark }) {
+  const u = conv.user || {};
+  const name = u.username || u.name || `Ext ${u.extension}`;
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-all border-l-[3px] ${
+      className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
         isSelected
           ? dark
-            ? "bg-gray-700 border-l-emerald-500"
-            : "bg-gray-100 border-l-emerald-500"
+            ? "bg-gray-700/80"
+            : "bg-[#f0faf3]"
           : dark
-            ? "border-l-transparent hover:bg-gray-800"
-            : "border-l-transparent hover:bg-gray-50"
-      } ${dark ? "border-b border-gray-800" : "border-b border-gray-100"}`}
+            ? "hover:bg-gray-800"
+            : "hover:bg-gray-50"
+      }`}
     >
-      <div className="relative flex-shrink-0">
-        <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-sm font-medium ${getColor(u.username)}`}>
-          {getInitials(u.username)}
-        </div>
-        {online && (
-          <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-green-500 rounded-full border-[2.5px] border-white dark:border-gray-900" />
-        )}
-      </div>
+      <Avatar user={u} online={online} />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium truncate">{u.username}</p>
-          <p className="text-[11px] text-gray-400 flex-shrink-0 ml-2">{conv.last_message_at ? formatTime(conv.last_message_at) : ""}</p>
-        </div>
-        <p className={`text-[11px] ${dark ? "text-gray-500" : "text-gray-400"} truncate`}>Ext: {u.extension}</p>
-        <div className="flex items-center gap-1 mt-0.5">
-          <p className={`text-xs truncate ${conv.last_message ? (dark ? "text-gray-400" : "text-gray-500") : "text-gray-400 italic"}`}>
-            {conv.last_message || "No messages yet"}
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[15px] font-medium truncate">
+            {name}
+            {u.extension && (
+              <span className={`ml-1.5 text-xs font-normal ${dark ? "text-gray-500" : "text-gray-400"}`}>
+                {u.extension}
+              </span>
+            )}
           </p>
-        </div>
-      </div>
-      {conv.unread_count > 0 && (
-        <div className="flex-shrink-0 ml-2">
-          <span className="bg-emerald-500 text-white text-[11px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shadow-sm">
-            {conv.unread_count > 99 ? '99+' : conv.unread_count}
+          <span className={`text-[11px] flex-shrink-0 ${dark ? "text-gray-500" : "text-gray-400"}`}>
+            {formatTime(conv.last_message_at)}
           </span>
         </div>
-      )}
+        <div className="flex items-center justify-between gap-2 mt-0.5">
+          <div className="flex-1 min-w-0">
+            {typing ? (
+              <span className="text-xs text-[#00a884] font-medium inline-flex items-center gap-1">
+                <TypingDots colorClass="bg-[#00a884]" /> typing…
+              </span>
+            ) : (
+              <p
+                className={`text-[13px] truncate ${
+                  conv.last_message
+                    ? dark
+                      ? "text-gray-400"
+                      : "text-gray-500"
+                    : dark
+                      ? "text-gray-600"
+                      : "text-gray-400"
+                }`}
+              >
+                {conv.last_message || "No messages yet"}
+              </p>
+            )}
+          </div>
+          {conv.unread_count > 0 && (
+            <span className="flex-shrink-0 min-w-[22px] h-[22px] px-1.5 rounded-full bg-[#00a884] text-white text-[11px] font-bold flex items-center justify-center shadow-sm">
+              {conv.unread_count > 99 ? "99+" : conv.unread_count}
+            </span>
+          )}
+        </div>
+      </div>
     </button>
+  );
+});
+
+// Quoted message preview rendered inside a bubble that is a reply.
+const QuotedBlock = memo(function QuotedBlock({ replyTo, quoteName, dark, mine }) {
+  const border = mine ? "border-[#4db6ac]" : dark ? "border-gray-500" : "border-gray-300";
+  const textCls = mine ? (dark ? "text-gray-200" : "text-gray-700") : dark ? "text-gray-200" : "text-gray-700";
+  const subCls = mine ? (dark ? "text-gray-300" : "text-gray-500") : dark ? "text-gray-400" : "text-gray-500";
+  return (
+    <div className={`mb-1.5 pl-2 border-l-2 ${border}`}>
+      {replyTo && replyTo.content ? (
+        <>
+          <p className={`text-[12px] font-semibold leading-tight ${textCls}`}>
+            {replyTo.sender && quoteName ? (String(replyTo.sender_id) === quoteName.myId ? "You" : replyTo.sender.username) : ""}
+          </p>
+          <p className={`text-[12px] leading-snug truncate ${subCls}`}>{replyTo.content}</p>
+        </>
+      ) : (
+        <p className={`text-[12px] italic ${subCls}`}>Original message unavailable</p>
+      )}
+    </div>
+  );
+});
+
+const MessageBubble = memo(function MessageBubble({ msg, isMine, dark, status, myId, canDelete, onRetry, onMenu, onDelete }) {
+  const showQuote = msg.reply_to_id || msg.reply_to;
+  const quoteName = { myId };
+  const actionBtnCls =
+    "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1.5 rounded-full text-gray-400 hover:bg-black/10 dark:hover:bg-white/10 self-center";
+  return (
+    <div className={`group flex items-end ${isMine ? "justify-end" : "justify-start"} mb-[2px]`}>
+      <div className="flex items-end gap-0.5">
+        {isMine && (
+          <>
+            {canDelete && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(msg);
+                }}
+                className={`${actionBtnCls} hover:text-red-500`}
+                title="Delete message"
+              >
+                <FiTrash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={(e) => onMenu(msg, e)}
+              onContextMenu={(e) => onMenu(msg, e)}
+              className={actionBtnCls}
+              title="Message options"
+            >
+              <FiChevronDown className="w-4 h-4" />
+            </button>
+          </>
+        )}
+        <div
+          onContextMenu={(e) => onMenu(msg, e)}
+          className={`relative max-w-[85%] sm:max-w-[75%] md:max-w-[70%] px-2.5 py-1.5 text-[14px] leading-relaxed shadow-sm animate-fade-in ${
+            isMine
+              ? dark
+                ? "bg-[#005c4b] text-gray-100 rounded-xl rounded-tr-sm"
+                : "bg-[#d9fdd3] text-gray-800 rounded-xl rounded-tr-sm"
+              : dark
+                ? "bg-gray-700 text-gray-100 rounded-xl rounded-tl-sm"
+                : "bg-white text-gray-800 rounded-xl rounded-tl-sm"
+          }`}
+        >
+          {showQuote && <QuotedBlock replyTo={msg.reply_to} quoteName={quoteName} dark={dark} mine={isMine} />}
+          <p className="whitespace-pre-wrap break-words pr-12">{msg.content}</p>
+          <div
+            className={`absolute bottom-1 right-2 flex items-center gap-1 ${
+              isMine ? (dark ? "text-gray-300" : "text-gray-500") : dark ? "text-gray-400" : "text-gray-400"
+            }`}
+          >
+            <span className="text-[10px]">{formatMsgTime(msg.created_at)}</span>
+            {isMine &&
+              (status === "failed" ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRetry(msg);
+                  }}
+                  title="Message failed. Tap to retry."
+                  className="text-red-300 hover:text-red-100 transition-colors"
+                >
+                  <FiRefreshCw className="w-3.5 h-3.5" />
+                </button>
+              ) : (
+                <MessageStatus status={status} />
+              ))}
+          </div>
+          {isMine && status === "failed" && (
+            <div className="absolute -top-3 left-2 inline-flex items-center gap-1 text-red-500 dark:text-red-400 text-[10px] font-medium">
+              <FiAlertTriangle className="w-3 h-3" /> Failed
+            </div>
+          )}
+        </div>
+        {!isMine && (
+          <>
+            <button
+              onClick={(e) => onMenu(msg, e)}
+              onContextMenu={(e) => onMenu(msg, e)}
+              className={actionBtnCls}
+              title="Message options"
+            >
+              <FiChevronDown className="w-4 h-4" />
+            </button>
+            {canDelete && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(msg);
+                }}
+                className={`${actionBtnCls} hover:text-red-500`}
+                title="Delete message"
+              >
+                <FiTrash2 className="w-4 h-4" />
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
+
+function MessageContextMenu({ x, y, dark, items }) {
+  const menuW = 200;
+  const menuH = items.length * 44 + 14;
+  const left = Math.max(8, Math.min(x, window.innerWidth - menuW - 8));
+  const top = Math.max(8, Math.min(y, window.innerHeight - menuH - 8));
+  return (
+    <div
+      style={{ position: "fixed", left, top, zIndex: 70 }}
+      className={`w-[200px] rounded-xl shadow-2xl py-1.5 text-sm overflow-hidden border animate-fade-in ${
+        dark ? "bg-gray-800 border-gray-700 text-gray-100" : "bg-white border-gray-100 text-gray-800"
+      }`}
+    >
+      {items.map((item, i) => (
+        <button
+          key={i}
+          onClick={item.onClick}
+          className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+            item.danger ? "text-red-500" : ""
+          } ${dark ? "hover:bg-gray-700" : "hover:bg-gray-50"}`}
+        >
+          <span className="text-base">{item.icon}</span>
+          <span className="font-medium">{item.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
-function MessageBubble({ msg, isMine, dark }) {
+function MessageInfoModal({ msg, isMine, dark, onClose }) {
+  const status = deriveStatus(msg);
+  const Row = ({ label, value }) => (
+    <div className="flex justify-between gap-4">
+      <span className={dark ? "text-gray-400" : "text-gray-500"}>{label}</span>
+      <span className="font-medium text-right">{value || "—"}</span>
+    </div>
+  );
   return (
-    <div className={`flex ${isMine ? "justify-end" : "justify-start"} mb-1`}>
-      <div className={`relative max-w-[75%] px-3 py-2 text-sm leading-relaxed shadow-sm ${
-        isMine
-          ? "bg-emerald-500 text-white rounded-2xl rounded-br-sm"
-          : dark
-            ? "bg-gray-700 text-gray-100 rounded-2xl rounded-bl-sm"
-            : "bg-white text-gray-800 rounded-2xl rounded-bl-sm"
-      }`}>
-        <p className="whitespace-pre-wrap break-words pr-14">{msg.content}</p>
-        <div className={`absolute bottom-1 right-2 flex items-center gap-0.5 ${
-          isMine ? "text-white/80" : dark ? "text-gray-400" : "text-gray-400"
-        }`}>
-          <span className="text-[10px]">{formatMsgTime(msg.created_at)}</span>
-          {isMine && (
-            msg.is_read
-              ? <FiCheck className="w-3 h-3 text-blue-200" />
-              : <FiClock className="w-3 h-3 opacity-60" />
-          )}
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div
+        className={`relative w-full max-w-sm rounded-2xl shadow-xl p-6 animate-fade-in ${
+          dark ? "bg-gray-800 text-white" : "bg-white text-gray-900"
+        }`}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Message information</h3>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10">
+            <FiX className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="space-y-3 text-sm">
+          <Row label="Sender" value={isMine ? "You" : msg.sender?.username || `User ${msg.sender_id}`} />
+          <Row label="Date" value={formatFullDate(msg.created_at)} />
+          {isMine && <Row label="Status" value={STATUS_LABELS[status]} />}
+          {isMine && msg.delivered_at && <Row label="Delivered" value={formatFullDate(msg.delivered_at)} />}
+          {isMine && msg.read_at && <Row label="Read" value={formatFullDate(msg.read_at)} />}
+        </div>
+        <button
+          onClick={onClose}
+          className="mt-5 w-full py-2.5 rounded-xl text-sm font-medium bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DeleteConfirmModal({ dark, deleting, onCancel, onConfirm }) {
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
+      <div
+        className={`relative w-full max-w-sm rounded-2xl shadow-xl p-6 animate-fade-in ${
+          dark ? "bg-gray-800 text-white" : "bg-white text-gray-900"
+        }`}
+      >
+        <h3 className="text-lg font-semibold mb-2">Delete this message?</h3>
+        <p className={`text-sm mb-6 ${dark ? "text-gray-300" : "text-gray-500"}`}>
+          This message will be removed for everyone in this chat.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="px-4 py-2 rounded-xl text-sm font-medium bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+          >
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function ChatHeader({ user, online, dark, onBack, onVoiceCall, onVideoCall }) {
+function ChatHeader({ user, online, typing, dark, onBack, onVoiceCall, onVideoCall }) {
   return (
-    <div className={`px-4 py-2.5 flex items-center gap-3 ${dark ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"} border-b shadow-sm`}>
-      <button onClick={onBack} className="md:hidden p-1 -ml-1">
+    <div
+      className={`px-4 py-2.5 flex items-center gap-3 border-b ${
+        dark ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"
+      }`}
+    >
+      <button onClick={onBack} className="md:hidden p-1 -ml-1 text-gray-500 dark:text-gray-300" title="Back">
         <FiChevronLeft className="w-5 h-5" />
       </button>
-      <div className="relative flex-shrink-0">
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-medium ${getColor(user.username)}`}>
-          {getInitials(user.username)}
-        </div>
-        {online && (
-          <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800" />
-        )}
-      </div>
+      <Avatar user={user} size="sm" online={online} />
       <div className="flex-1 min-w-0">
-        <p className="font-semibold text-sm truncate">{user.username}</p>
-        <p className="text-[11px] text-gray-400">
-          {online ? "Online" : "Offline"} · Ext: {user.extension}
+        <p className="font-semibold text-sm truncate">
+          {user?.username || user?.name || `Ext ${user?.extension}`}
+          {user?.extension && (
+            <span className={`ml-1.5 font-normal text-xs ${dark ? "text-gray-400" : "text-gray-500"}`}>
+              {user.extension}
+            </span>
+          )}
         </p>
+        <div className="flex items-center gap-1.5 text-[11px] mt-0.5">
+          {typing ? (
+            <span className="text-[#00a884] font-medium inline-flex items-center gap-1">
+              <TypingDots colorClass="bg-[#00a884]" /> typing…
+            </span>
+          ) : (
+            <span className={online ? "text-green-500 font-medium" : dark ? "text-gray-500" : "text-gray-400"}>
+              {online ? "online" : "offline"}
+            </span>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-1">
-        <button onClick={onVoiceCall} className={`p-2 rounded-full transition-colors ${dark ? "hover:bg-gray-700" : "hover:bg-gray-200"}`} title="Voice Call">
+      <div className="flex items-center gap-0.5">
+        <button
+          onClick={onVoiceCall}
+          className={`p-2.5 rounded-full transition-colors ${
+            dark ? "hover:bg-gray-700" : "hover:bg-gray-200"
+          } text-gray-600 dark:text-gray-200`}
+          title="Voice call"
+        >
           <FiPhone className="w-[18px] h-[18px]" />
         </button>
-        <button onClick={onVideoCall} className={`p-2 rounded-full transition-colors ${dark ? "hover:bg-gray-700" : "hover:bg-gray-200"}`} title="Video Call">
+        <button
+          onClick={onVideoCall}
+          className={`p-2.5 rounded-full transition-colors ${
+            dark ? "hover:bg-gray-700" : "hover:bg-gray-200"
+          } text-gray-600 dark:text-gray-200`}
+          title="Video call"
+        >
           <FiVideo className="w-[18px] h-[18px]" />
-        </button>
-        <button className={`p-2 rounded-full transition-colors ${dark ? "hover:bg-gray-700" : "hover:bg-gray-200"}`} title="More">
-          <FiMoreVertical className="w-[18px] h-[18px]" />
         </button>
       </div>
     </div>
@@ -164,16 +649,20 @@ function ChatHeader({ user, online, dark, onBack, onVoiceCall, onVideoCall }) {
 
 function EmptyChat({ dark }) {
   return (
-    <div className="flex-1 flex items-center justify-center">
+    <div className="flex-1 flex items-center justify-center h-full">
       <div className="text-center px-8">
-        <div className={`w-28 h-28 mx-auto mb-6 rounded-full flex items-center justify-center ${dark ? "bg-gray-800" : "bg-gray-100"}`}>
-          <svg viewBox="0 0 24 24" className={`w-14 h-14 ${dark ? "text-gray-600" : "text-gray-300"}`} fill="none" stroke="currentColor" strokeWidth="1.2">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-          </svg>
+        <div
+          className={`w-28 h-28 mx-auto mb-6 rounded-full flex items-center justify-center ${
+            dark ? "bg-gray-800" : "bg-gray-100"
+          }`}
+        >
+          <FiSend className={`w-12 h-12 ${dark ? "text-gray-600" : "text-gray-300"} -scale-x-100`} />
         </div>
-        <p className={`text-lg font-semibold mb-1 ${dark ? "text-gray-300" : "text-gray-700"}`}>Select a chat</p>
+        <p className={`text-lg font-semibold mb-1 ${dark ? "text-gray-300" : "text-gray-700"}`}>
+          Select a conversation to start chatting
+        </p>
         <p className={`text-sm max-w-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>
-          Choose a conversation from the left panel to start messaging
+          Choose a chat from the left panel to start messaging. Messages stay in sync in real time.
         </p>
       </div>
     </div>
@@ -187,257 +676,850 @@ function EmptyConversations({ dark }) {
         <FiSearch className="w-6 h-6" />
       </div>
       <p className="text-sm font-medium">No conversations yet</p>
-      <p className="text-xs mt-1 text-center">Search for a user by name or extension to start a new conversation</p>
+      <p className="text-xs mt-1 text-center">Start a chat from your contacts and it will appear here.</p>
     </div>
   );
 }
 
-const ChatPage = ({ darkMode, onVoiceCall, onVideoCall }) => {
+const Skeleton = ({ className = "" }) => (
+  <div className={`animate-pulse bg-gray-300 dark:bg-gray-600 ${className}`} />
+);
+
+const ConversationSkeletons = () => (
+  <div className="px-4 py-2">
+    {Array.from({ length: 6 }).map((_, i) => (
+      <div key={i} className="flex items-center gap-3 py-2.5">
+        <Skeleton className="w-12 h-12 rounded-full" />
+        <div className="flex-1 space-y-2">
+          <Skeleton className="h-3.5 rounded w-1/3" />
+          <Skeleton className="h-3 rounded w-2/3" />
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
+const MessageSkeletons = () => (
+  <div className="space-y-3 px-2 pt-6">
+    <div className="flex justify-center">
+      <Skeleton className="h-6 w-28 rounded-full" />
+    </div>
+    <div className="flex justify-start">
+      <Skeleton className="h-14 w-56 rounded-xl rounded-tl-sm" />
+    </div>
+    <div className="flex justify-end">
+      <Skeleton className="h-16 w-64 rounded-xl rounded-tr-sm" />
+    </div>
+    <div className="flex justify-start">
+      <Skeleton className="h-12 w-44 rounded-xl rounded-tl-sm" />
+    </div>
+    <div className="flex justify-end">
+      <Skeleton className="h-14 w-52 rounded-xl rounded-tr-sm" />
+    </div>
+  </div>
+);
+
+/* ------------------------------------------------------------------ */
+/* Main component                                                      */
+/* ------------------------------------------------------------------ */
+
+const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
-  const [newMessage, setNewMessage] = useState("");
+  const [draft, setDraft] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [onlineUsers, setOnlineUsers] = useState(new Set());
+  const [typingMap, setTypingMap] = useState(new Map());
   const [showSidebar, setShowSidebar] = useState(true);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [replyTarget, setReplyTarget] = useState(null);
+  const [menu, setMenu] = useState(null);
+  const [infoTarget, setInfoTarget] = useState(null);
+  const [toast, setToast] = useState(null);
 
-  const messagesEndRef = useRef(null);
-  const inputRef = useRef(null);
+  const me = Number(localStorage.getItem("user_id") || 0);
+  const myUsername = localStorage.getItem("username") || "";
+  const myRole = localStorage.getItem("userRole") || "";
 
-  const currentUserId = localStorage.getItem("user_id");
-
-  const scrollToBottom = useCallback(() => {
-    requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }));
-  }, []);
-
-  useEffect(() => { loadConversations(); loadUnreadCount(); fetchOnlineUsers(); }, []);
-
-  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
+  const scrollContainerRef = useRef(null);
+  const textareaRef = useRef(null);
+  const draftRef = useRef("");
+  const atBottomRef = useRef(true);
+  const forceScrollRef = useRef(false);
+  const selectedUserRef = useRef(null);
+  const wsConnectedRef = useRef(false);
+  const lastTypingSentRef = useRef(0);
+  const messagesRef = useRef([]);
+  const toastTimerRef = useRef(null);
 
   useEffect(() => {
-    const listener = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "chat_message") {
-          const msg = data.data;
-          if (selectedUser && String(msg.sender_id) === String(selectedUser.id)) {
-            setMessages(prev => {
-              if (prev.find(m => String(m.id) === String(msg.id))) return prev;
-              return [...prev, msg];
-            });
-            markAsRead(msg.sender_id);
-          }
-          loadConversations();
-          loadUnreadCount();
-        } else if (data.type === "chat_message_sent") {
-          const msg = data.data;
-          if (selectedUser && String(msg.receiver_id) === String(selectedUser.id)) {
-            setMessages(prev => {
-              if (prev.find(m => String(m.id) === String(msg.id))) return prev;
-              return [...prev, msg];
-            });
-          }
-          loadConversations();
-        } else if (data.type === "user_status_changed") {
-          if (data.status === "online") setOnlineUsers(prev => new Set(prev).add(data.from));
-          else setOnlineUsers(prev => { const n = new Set(prev); n.delete(data.from); return n; });
-        }
-      } catch (e) {}
-    };
-    const unsub = addMessageListener(listener);
-    return () => unsub();
-  }, [selectedUser, currentUserId]);
+    selectedUserRef.current = selectedUser;
+  }, [selectedUser]);
 
-  const fetchOnlineUsers = async () => {
-    try {
-      const data = await getUsers();
-      if (data.success) {
-        setOnlineUsers(new Set(data.users.filter(u => u.status === "online").map(u => u.extension)));
+  useEffect(() => {
+    wsConnectedRef.current = wsConnected;
+  }, [wsConnected]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setMenu(null);
+        setInfoTarget(null);
+        setDeleteTarget(null);
+        setReplyTarget(null);
       }
-    } catch (e) {}
-  };
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-  const loadConversations = async () => {
+  const showToast = useCallback((text) => {
+    setToast(text);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 1800);
+  }, []);
+
+  const isMyMessage = useCallback(
+    (msg) => me && msg && String(msg.sender_id) === String(me),
+    [me]
+  );
+
+  const isOnline = useCallback(
+    (user) => {
+      if (!user) return false;
+      if (user.extension && onlineUsers.has(user.extension)) return true;
+      if (user.is_online === true || user.status === "online") return true;
+      return false;
+    },
+    [onlineUsers]
+  );
+
+  const isTyping = useCallback((ext) => typingMap.has(ext), [typingMap]);
+
+  /* ---------------- data loading ---------------- */
+
+  const loadConversations = useCallback(async () => {
     try {
       const data = await getConversations();
       if (data.success) {
-        const sorted = (data.conversations || []).sort((a, b) => {
-          const aT = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
-          const bT = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
-          return bT - aT;
-        });
-        setConversations(sorted);
-      }
-    } catch (e) {}
-  };
-
-  const loadUnreadCount = async () => {
-    try { await getUnreadCount(); } catch (e) {}
-  };
-
-  const loadMessages = async (user) => {
-    setSelectedUser(user);
-    setShowSidebar(false);
-    try {
-      const data = await getMessages(user.id);
-      if (data.success) {
-        setMessages(data.messages || []);
-        markAsRead(user.id);
-        loadConversations();
-        loadUnreadCount();
-      }
-    } catch (e) {}
-  };
-
-  const handleSend = async () => {
-    if (!newMessage.trim() || !selectedUser) return;
-    const content = newMessage.trim();
-    setNewMessage("");
-    try {
-      const data = await sendMessage(selectedUser.id, content);
-      if (data.success && data.message) {
-        setMessages(prev => prev.find(m => String(m.id) === String(data.message.id)) ? prev : [...prev, data.message]);
-        loadConversations();
-      } else {
-        setMessages(prev => [...prev, { id: Date.now(), sender_id: Number(currentUserId), receiver_id: selectedUser.id, content, created_at: new Date().toISOString(), msg_type: "text" }]);
-        loadConversations();
+        setConversations(sortConversations((data.conversations || []).slice()));
       }
     } catch (e) {
-      setMessages(prev => [...prev, { id: Date.now(), sender_id: Number(currentUserId), receiver_id: selectedUser.id, content, created_at: new Date().toISOString(), msg_type: "text" }]);
-      loadConversations();
+      // keep existing list on failure
+    } finally {
+      setLoadingConversations(false);
+    }
+  }, []);
+
+  const fetchOnlineUsers = useCallback(async () => {
+    try {
+      const data = await getUsers();
+      if (data.success) {
+        setOnlineUsers(
+          new Set(
+            (data.users || [])
+              .filter((u) => u.status === "online" || u.is_online === true)
+              .map((u) => u.extension)
+          )
+        );
+      }
+    } catch (e) {}
+  }, []);
+
+  const openConversation = useCallback(async (user) => {
+    if (!user || !user.id) return;
+    selectedUserRef.current = user;
+    setSelectedUser(user);
+    setShowSidebar(false);
+    setTypingMap(new Map());
+    setReplyTarget(null);
+    setLoadingMessages(true);
+    setMessages([]);
+    forceScrollRef.current = true;
+    try {
+      const data = await getMessages(user.id);
+      const list = (data.messages || []).map((m) => ({
+        ...m,
+        key: `m-${m.id}`,
+        _status: deriveStatus(m),
+      }));
+      setMessages(list);
+      clearUnread(setConversations, user.id);
+      markAsRead(user.id).catch(() => {});
+    } catch (e) {
+      setMessages([]);
+    } finally {
+      setLoadingMessages(false);
+      forceScrollRef.current = true;
+    }
+  }, []);
+
+  /* ---------------- scrolling ---------------- */
+
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    atBottomRef.current = dist < 140;
+    setShowScrollDown(dist > 140);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    if (forceScrollRef.current) {
+      forceScrollRef.current = false;
+      el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+      setShowScrollDown(false);
+    } else if (atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, selectedUser?.id]);
+
+  /* ---------------- typing indicator ---------------- */
+
+  // Expire typing indicators after ~3.5s of inactivity.
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setTypingMap((prev) => {
+        const now = Date.now();
+        let changed = false;
+        const next = new Map();
+        prev.forEach((ts, ext) => {
+          if (now - ts < 3500) next.set(ext, ts);
+          else changed = true;
+        });
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const sendTyping = useCallback(() => {
+    const user = selectedUserRef.current;
+    const now = Date.now();
+    if (!user || !wsConnectedRef.current) return;
+    if (now - lastTypingSentRef.current < 2500) return;
+    lastTypingSentRef.current = now;
+    sendWebSocketMessage({ type: "chat_typing", to: user.extension, data: { is_typing: true } }).catch(
+      () => {}
+    );
+  }, []);
+
+  /* ---------------- web socket events ---------------- */
+
+  const handleWSEvent = useCallback(
+    (event) => {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+      if (!data || !data.type) return;
+
+      switch (data.type) {
+        case "chat_message": {
+          const msg = data.data;
+          if (!msg || String(msg.sender_id) === String(me)) return;
+          const isOpen = String(selectedUserRef.current?.id) === String(msg.sender_id);
+          const incoming = { ...msg, key: `m-${msg.id}`, _status: "sent" };
+          if (isOpen) {
+            setMessages((prev) => mergeMessage(prev, incoming));
+            clearUnread(setConversations, msg.sender_id);
+            markAsRead(msg.sender_id).catch(() => {});
+          }
+          upsertConversationFromMessage(setConversations, msg, me, !isOpen);
+          break;
+        }
+        case "chat_message_sent": {
+          const msg = data.data;
+          if (!msg || String(msg.sender_id) !== String(me)) return;
+          if (String(msg.receiver_id) === String(selectedUserRef.current?.id)) {
+            setMessages((prev) =>
+              mergeMessage(prev, { ...msg, key: `m-${msg.id}`, _status: deriveStatus(msg) })
+            );
+          }
+          upsertConversationFromMessage(setConversations, msg, me, false);
+          break;
+        }
+        case "chat_message_delivered": {
+          const d = data.data || {};
+          if (d.message_id) setMsgStatus(setMessages, d.message_id, "delivered");
+          else if (d.receiver_id) markAllDeliveredTo(setMessages, me, d.receiver_id);
+          break;
+        }
+        case "chat_message_read": {
+          const d = data.data || {};
+          if (d.reader_id) markReadBy(setMessages, me, d.reader_id);
+          break;
+        }
+        case "chat_message_deleted": {
+          const d = data.data || {};
+          if (!d.message_id) break;
+          setMessages((prev) => prev.filter((m) => String(m.id) !== String(d.message_id)));
+          if (d.sender_id && d.receiver_id) {
+            const otherId = String(d.sender_id) === String(me) ? d.receiver_id : d.sender_id;
+            const conv = d.conversation || {};
+            updateConversationPreview(
+              setConversations,
+              otherId,
+              conv.last_message || "",
+              conv.last_message_at || null
+            );
+          }
+          break;
+        }
+        case "chat_typing": {
+          if (data.from) setTypingMap((prev) => new Map(prev).set(data.from, Date.now()));
+          break;
+        }
+        case "user_status_changed": {
+          const ext = data.from || data.extension;
+          if (ext) {
+            setOnlineUsers((prev) => {
+              const next = new Set(prev);
+              if (data.status === "online") next.add(ext);
+              else next.delete(ext);
+              return next;
+            });
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [me]
+  );
+
+  /* ---------------- effects ---------------- */
+
+  useEffect(() => {
+    loadConversations();
+    fetchOnlineUsers();
+  }, [loadConversations, fetchOnlineUsers]);
+
+  useEffect(() => {
+    const unsubStatus = addConnectionStatusListener(({ connected }) => setWsConnected(connected));
+    setWsConnected(getConnectionStatus().isConnected);
+    const unsubMsg = addMessageListener(handleWSEvent);
+    return () => {
+      unsubStatus();
+      unsubMsg();
+    };
+  }, [handleWSEvent]);
+
+  // Open a conversation passed from the Contacts tab.
+  useEffect(() => {
+    if (initialContact?.id) {
+      setConversations((prev) =>
+        prev.some((c) => String(c.user.id) === String(initialContact.id))
+          ? prev
+          : sortConversations([
+              ...prev,
+              {
+                conversation_id: initialContact.id,
+                user: initialContact,
+                last_message: "",
+                last_message_at: new Date().toISOString(),
+                unread_count: 0,
+              },
+            ])
+      );
+      openConversation(initialContact);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialContact?.id]);
+
+  /* ---------------- sending ---------------- */
+
+  const handleSend = useCallback(async () => {
+    const user = selectedUserRef.current;
+    const content = (draftRef.current || "").trim();
+    if (!content || !user) return;
+
+    const reply = replyTarget;
+    draftRef.current = "";
+    setDraft("");
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+
+    const cmid = genClientMessageId();
+    const optimistic = {
+      key: `t-${cmid}`,
+      _tempId: cmid,
+      _status: "sending",
+      id: null,
+      sender_id: me,
+      receiver_id: user.id,
+      content,
+      msg_type: "text",
+      created_at: new Date().toISOString(),
+      is_read: false,
+      delivered_at: null,
+      sender: { id: me, username: myUsername, extension: localStorage.getItem("extension") },
+      reply_to_id: reply?.id,
+      reply_to: reply
+        ? {
+            content: reply.content,
+            sender_id: reply.sender_id,
+            sender: {
+              username: String(reply.sender_id) === String(me) ? myUsername : reply.sender?.username || "",
+            },
+          }
+        : null,
+    };
+
+    setMessages((prev) => [...prev, optimistic]);
+    upsertConversationFromMessage(setConversations, optimistic, me, false);
+    forceScrollRef.current = true;
+
+    try {
+      const res = await sendMessage(user.id, content, cmid, "text", reply?.id);
+      if (res && res.success && res.message) {
+        const serverMsg = { ...res.message, key: `t-${cmid}`, _status: deriveStatus(res.message) };
+        setMessages((prev) => mergeMessage(prev, serverMsg));
+        upsertConversationFromMessage(setConversations, res.message, me, false);
+      } else {
+        setMessages((prev) => prev.map((m) => (m._tempId === cmid ? { ...m, _status: "failed" } : m)));
+      }
+    } catch (err) {
+      setMessages((prev) => prev.map((m) => (m._tempId === cmid ? { ...m, _status: "failed" } : m)));
+    } finally {
+      setReplyTarget(null);
+    }
+  }, [me, myUsername, replyTarget]);
+
+  const retryMessage = useCallback((msg) => {
+    if (!msg || !msg._tempId) return;
+    setMessages((prev) => prev.map((m) => (m._tempId === msg._tempId ? { ...m, _status: "sending" } : m)));
+    sendMessage(msg.receiver_id, msg.content, msg._tempId, "text", msg.reply_to_id)
+      .then((res) => {
+        if (res && res.success && res.message) {
+          setMessages((prev) =>
+            mergeMessage(prev, { ...res.message, key: `t-${msg._tempId}`, _status: deriveStatus(res.message) })
+          );
+        } else {
+          setMessages((prev) =>
+            prev.map((m) => (m._tempId === msg._tempId ? { ...m, _status: "failed" } : m))
+          );
+        }
+      })
+      .catch(() => {
+        setMessages((prev) => prev.map((m) => (m._tempId === msg._tempId ? { ...m, _status: "failed" } : m)));
+      });
+  }, []);
+
+  /* ---------------- context menu / message actions ---------------- */
+
+  const openMessageMenu = useCallback((msg, e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!msg) return;
+    setMenu({ msg, x: e?.clientX || 0, y: e?.clientY || 0 });
+  }, []);
+
+  const buildMenuItems = useCallback(
+    (msg) => {
+      const isMine = isMyMessage(msg);
+      const items = [
+        {
+          icon: <FiCornerUpLeft className="w-4 h-4" />,
+          label: "Reply",
+          onClick: () => {
+            setReplyTarget(msg);
+            setMenu(null);
+            textareaRef.current?.focus();
+          },
+        },
+        {
+          icon: <FiCopy className="w-4 h-4" />,
+          label: "Copy",
+          onClick: () => {
+            copyToClipboard(msg.content).then((ok) => {
+              if (ok) showToast("Message copied");
+            });
+            setMenu(null);
+          },
+        },
+        {
+          icon: <FiInfo className="w-4 h-4" />,
+          label: "Information",
+          onClick: () => {
+            setInfoTarget(msg);
+            setMenu(null);
+          },
+        },
+      ];
+      if (msg.id && (isMine || myRole === "admin")) {
+        items.push({
+          icon: <FiTrash2 className="w-4 h-4" />,
+          label: "Delete",
+          danger: true,
+          onClick: () => {
+            setDeleteTarget(msg);
+            setMenu(null);
+          },
+        });
+      }
+      return items;
+    },
+    [isMyMessage, myRole, showToast]
+  );
+
+  /* ---------------- deleting ---------------- */
+
+  const handleDeleteConfirm = useCallback(async () => {
+    const msg = deleteTarget;
+    setDeleting(true);
+    if (!msg || !msg.id) {
+      setDeleteTarget(null);
+      setDeleting(false);
+      return;
+    }
+    const otherId = String(msg.sender_id) === String(me) ? msg.receiver_id : msg.sender_id;
+    try {
+      await deleteMessage(msg.id);
+      const next = messagesRef.current.filter((m) => String(m.id) !== String(msg.id));
+      const latest = next
+        .filter((m) => String(m.sender_id) === String(otherId) || String(m.receiver_id) === String(otherId))
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      setMessages(next);
+      updateConversationPreview(setConversations, otherId, latest?.content || "", latest?.created_at || null);
+      // Backend also broadcasts chat_message_deleted to both users; this
+      // explicit send is a belt-and-braces fallback for any routing hiccup.
+      sendWebSocketMessage({
+        type: "chat_message_deleted",
+        data: { message_id: msg.id, sender_id: msg.sender_id, receiver_id: msg.receiver_id },
+      }).catch(() => {});
+    } catch (e) {
+      showToast("Couldn't delete the message");
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  }, [deleteTarget, me, showToast]);
+
+  const handleComposerChange = (e) => {
+    const value = e.target.value;
+    draftRef.current = value;
+    setDraft(value);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 130) + "px";
+    }
+    sendTyping();
+  };
+
+  const handleComposerKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
     }
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  const handleBack = () => {
+    setSelectedUser(null);
+    setMessages([]);
+    setShowSidebar(true);
   };
 
-  const filteredConversations = conversations.filter(c =>
-    !searchTerm ||
-    c.user.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.user.extension?.includes(searchTerm)
-  );
+  /* ---------------- derived render state ---------------- */
 
-  const isOnline = (ext) => onlineUsers.has(ext);
+  const filteredConversations = conversations.filter((c) => {
+    if (!searchTerm) return true;
+    const q = searchTerm.toLowerCase();
+    const u = c.user || {};
+    return (
+      (u.username || "").toLowerCase().includes(q) ||
+      (u.name || "").toLowerCase().includes(q) ||
+      (u.extension || "").includes(q)
+    );
+  });
+
+  const selectedTyping = selectedUser && isTyping(selectedUser.extension);
+
+  const replyName = replyTarget
+    ? isMyMessage(replyTarget)
+      ? "You"
+      : replyTarget.sender?.username || "this message"
+    : "";
+
+  /* ---------------- render ---------------- */
 
   return (
-    <div className="flex h-full" style={{ fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif" }}>
-      {/* Left Panel */}
-      <div className={`${showSidebar || !selectedUser ? "flex" : "hidden md:flex"} w-full md:w-[420px] flex-shrink-0 flex-col ${darkMode ? "bg-gray-900 border-gray-700" : "bg-white border-gray-200"} border-r`}>
-        {/* Header */}
-        <div className={`${darkMode ? "bg-gray-850" : "bg-gray-50"} border-b ${darkMode ? "border-gray-700" : "border-gray-200"}`}>
-          <div className="px-4 pt-3 pb-2">
-            <div className="flex items-center justify-between mb-2">
+    <div className="flex flex-col h-full" style={{ fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif" }}>
+      {!wsConnected && (
+        <div className="px-3 py-1.5 text-xs font-medium text-center bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border-b border-amber-200 dark:border-amber-800">
+          Reconnecting to server… live updates will resume shortly
+        </div>
+      )}
+
+      <div className="flex flex-1 min-h-0">
+        {/* ---------------- Left panel: conversation list ---------------- */}
+        <div
+          className={`${showSidebar || !selectedUser ? "flex" : "hidden md:flex"} w-full md:w-[400px] lg:w-[430px] flex-shrink-0 flex-col ${
+            darkMode ? "bg-gray-900 border-gray-700" : "bg-white border-gray-200"
+          } border-r`}
+        >
+          <div
+            className={`px-4 pt-3 pb-2 border-b ${
+              darkMode ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"
+            }`}
+          >
+            <div className="flex items-center justify-between mb-2 px-1">
               <h2 className="text-lg font-bold">Chats</h2>
-              <span className="text-xs text-gray-400">{conversations.length} conversation{conversations.length !== 1 ? "s" : ""}</span>
+              <span className="text-xs text-gray-400">
+                {conversations.length} conversation{conversations.length !== 1 ? "s" : ""}
+              </span>
             </div>
             <div className="relative">
               <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-[18px] h-[18px] text-gray-400" />
               <input
                 type="text"
-                placeholder="Search by name or extension..."
+                placeholder="Search by name, username or extension..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm outline-none transition-colors ${
                   darkMode
-                    ? "bg-gray-800 text-white placeholder-gray-500 border border-gray-700 focus:border-gray-500"
-                    : "bg-gray-100 text-gray-900 border border-transparent focus:border-gray-300"
+                    ? "bg-gray-900 text-white placeholder-gray-500 border border-gray-700 focus:border-[#00a884]"
+                    : "bg-gray-100 text-gray-900 border border-transparent focus:border-[#00a884]"
                 }`}
               />
             </div>
           </div>
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            {loadingConversations ? (
+              <ConversationSkeletons />
+            ) : conversations.length === 0 ? (
+              <EmptyConversations dark={darkMode} />
+            ) : filteredConversations.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-gray-400 px-6">
+                <FiSearch className="w-5 h-5 mb-2" />
+                <p className="text-xs text-center">No chats match “{searchTerm}”</p>
+              </div>
+            ) : (
+              filteredConversations.map((conv) => (
+                <ConversationItem
+                  key={conv.conversation_id || conv.user.id}
+                  conv={conv}
+                  isSelected={String(selectedUser?.id) === String(conv.user.id)}
+                  online={isOnline(conv.user)}
+                  typing={isTyping(conv.user.extension)}
+                  onClick={() => openConversation(conv.user)}
+                  dark={darkMode}
+                />
+              ))
+            )}
+          </div>
         </div>
 
-        {/* Conversation list */}
-        <div className="flex-1 overflow-y-auto">
-          {filteredConversations.length === 0 ? (
-            <EmptyConversations dark={darkMode} />
-          ) : (
-            filteredConversations.map((conv) => (
-              <ConversationItem
-                key={conv.conversation_id || conv.user.id}
-                conv={conv}
-                isSelected={selectedUser?.id === conv.user.id}
-                online={isOnline(conv.user.extension)}
-                onClick={() => loadMessages(conv.user)}
+        {/* ---------------- Right panel: chat window ---------------- */}
+        <div className={`${!selectedUser ? "hidden md:flex" : "flex"} flex-1 flex-col min-w-0 relative`}>
+          {selectedUser ? (
+            <>
+              <ChatHeader
+                user={selectedUser}
+                online={isOnline(selectedUser)}
+                typing={selectedTyping}
                 dark={darkMode}
+                onBack={handleBack}
+                onVoiceCall={() => onVoiceCall && onVoiceCall(selectedUser)}
+                onVideoCall={() => onVideoCall && onVideoCall(selectedUser)}
               />
-            ))
+
+              <div className="relative flex-1 min-h-0">
+                <div
+                  ref={scrollContainerRef}
+                  onScroll={handleScroll}
+                  className="h-full overflow-y-auto custom-scrollbar px-4 md:px-8 lg:px-16 py-3"
+                  style={{
+                    backgroundImage: darkMode ? CHAT_BG_DARK : CHAT_BG_LIGHT,
+                    backgroundColor: darkMode ? "#0b141a" : "#efeae2",
+                  }}
+                >
+                  {loadingMessages ? (
+                    <MessageSkeletons />
+                  ) : messages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center">
+                        <p className={`text-sm ${darkMode ? "text-gray-400" : "text-gray-500"}`}>No messages yet</p>
+                        <p className={`text-xs mt-1 ${darkMode ? "text-gray-500" : "text-gray-400"}`}>
+                          Say hello to start the conversation
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {messages.map((msg, idx) => {
+                        const prev = messages[idx - 1];
+                        const showDate =
+                          !prev ||
+                          new Date(msg.created_at).toDateString() !==
+                            new Date(prev.created_at).toDateString();
+                        return (
+                          <div key={msg.key || msg._tempId || msg.id}>
+                            {showDate && <DateSeparator dateStr={msg.created_at} dark={darkMode} />}
+                            <MessageBubble
+                              msg={msg}
+                              isMine={isMyMessage(msg)}
+                              dark={darkMode}
+                              status={deriveStatus(msg)}
+                              myId={me}
+                              canDelete={!!msg.id && (isMyMessage(msg) || myRole === "admin")}
+                              onRetry={retryMessage}
+                              onMenu={openMessageMenu}
+                              onDelete={(m) => setDeleteTarget(m)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+
+                {showScrollDown && (
+                  <button
+                    onClick={() => {
+                      forceScrollRef.current = true;
+                      if (scrollContainerRef.current) {
+                        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+                      }
+                      atBottomRef.current = true;
+                      setShowScrollDown(false);
+                    }}
+                    className="absolute right-4 md:right-8 bottom-5 z-10 p-2.5 rounded-full bg-white dark:bg-gray-700 shadow-lg text-gray-600 dark:text-gray-200 border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+                    title="Scroll to bottom"
+                  >
+                    <FiArrowDown className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Reply bar */}
+              {replyTarget && (
+                <div
+                  className={`flex items-center gap-3 px-4 py-2 border-t ${
+                    darkMode ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"
+                  }`}
+                >
+                  <div className="flex-1 min-w-0 border-l-4 border-[#00a884] pl-3">
+                    <p className="text-xs font-semibold text-[#00a884]">Replying to {replyName}</p>
+                    <p className="text-xs truncate text-gray-500 dark:text-gray-400">
+                      {replyTarget.content || "Media message"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setReplyTarget(null)}
+                    className="p-1.5 rounded-full text-gray-400 hover:bg-black/10 dark:hover:bg-white/10"
+                    title="Cancel reply"
+                  >
+                    <FiX className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* Composer */}
+              <div
+                className={`px-4 py-3 border-t ${
+                  darkMode ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"
+                }`}
+              >
+                <div
+                  className={`flex items-end gap-2 rounded-xl px-3 py-1.5 border ${
+                    darkMode ? "bg-gray-900 border-gray-700" : "bg-white border-gray-200"
+                  }`}
+                >
+                  <textarea
+                    ref={textareaRef}
+                    rows={1}
+                    maxLength={5000}
+                    value={draft}
+                    onChange={handleComposerChange}
+                    onKeyDown={handleComposerKeyDown}
+                    placeholder="Type a message"
+                    className={`flex-1 bg-transparent text-sm outline-none resize-none py-1.5 max-h-[130px] ${
+                      darkMode ? "text-white placeholder-gray-500" : "text-gray-900 placeholder-gray-400"
+                    }`}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={!draft.trim()}
+                    className="p-2.5 mb-0.5 rounded-full bg-[#00a884] text-white hover:bg-[#008f70] disabled:opacity-30 disabled:cursor-not-allowed transition-colors shadow-sm"
+                    title="Send"
+                  >
+                    <FiSend className="w-[18px] h-[18px]" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1.5 text-center">
+                  Enter to send · Shift + Enter for a new line
+                </p>
+              </div>
+            </>
+          ) : (
+            <EmptyChat dark={darkMode} />
           )}
         </div>
       </div>
 
-      {/* Right Panel */}
-      <div className={`${!selectedUser ? "hidden md:flex" : "flex"} flex-1 flex-col`}>
-        {selectedUser ? (
-          <>
-            <ChatHeader
-              user={selectedUser}
-              online={isOnline(selectedUser.extension)}
-              dark={darkMode}
-              onBack={() => { setSelectedUser(null); setMessages([]); setShowSidebar(true); }}
-              onVoiceCall={() => onVoiceCall && onVoiceCall(selectedUser)}
-              onVideoCall={() => onVideoCall && onVideoCall(selectedUser)}
-            />
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[90] px-4 py-2 rounded-lg bg-gray-900 text-white text-sm shadow-lg animate-fade-in">
+          {toast}
+        </div>
+      )}
 
-            {/* Messages */}
-            <div className={`flex-1 overflow-y-auto px-4 py-3 relative ${
-              darkMode ? "bg-gray-900" : "bg-[#efeae2]"
-            }`}
-              style={!darkMode ? { backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23d4d4d4\' fill-opacity=\'0.12\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")' } : {}}
-            >
-              {messages.length === 0 ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center">
-                    <p className={`text-sm ${darkMode ? "text-gray-400" : "text-gray-500"}`}>No messages yet</p>
-                    <p className={`text-xs mt-1 ${darkMode ? "text-gray-500" : "text-gray-400"}`}>Send a message to start the conversation</p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {messages.map((msg, idx) => {
-                    const isMine = String(msg.sender_id) === String(currentUserId);
-                    const showDate = idx === 0 || new Date(msg.created_at).toDateString() !== new Date(messages[idx - 1]?.created_at).toDateString();
-                    return (
-                      <div key={msg.id || idx}>
-                        {showDate && <ChatDateSeparator dateStr={msg.created_at} dark={darkMode} />}
-                        <MessageBubble msg={msg} isMine={isMine} dark={darkMode} />
-                      </div>
-                    );
-                  })}
-                </>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
+      {/* Context menu */}
+      {menu && (
+        <>
+          <div
+            className="fixed inset-0 z-[60]"
+            onClick={() => setMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu(null);
+            }}
+          />
+          <MessageContextMenu
+            x={menu.x}
+            y={menu.y}
+            dark={darkMode}
+            items={buildMenuItems(menu.msg)}
+          />
+        </>
+      )}
 
-            {/* Input */}
-            <div className={`px-4 py-3 ${darkMode ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"} border-t`}>
-              <div className={`flex items-center gap-2 rounded-xl px-4 py-2 border ${
-                darkMode ? "bg-gray-700 border-gray-600" : "bg-white border-gray-200"
-              }`}>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Type a message..."
-                  className={`flex-1 bg-transparent text-sm outline-none py-1 ${darkMode ? "text-white placeholder-gray-400" : "text-gray-900"}`}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={!newMessage.trim()}
-                  className="p-2 text-emerald-500 hover:text-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                >
-                  <FiSend className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <EmptyChat dark={darkMode} />
-        )}
-      </div>
+      {infoTarget && (
+        <MessageInfoModal
+          msg={infoTarget}
+          isMine={isMyMessage(infoTarget)}
+          dark={darkMode}
+          onClose={() => setInfoTarget(null)}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteConfirmModal
+          dark={darkMode}
+          deleting={deleting}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={handleDeleteConfirm}
+        />
+      )}
     </div>
   );
 };

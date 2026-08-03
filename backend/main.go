@@ -113,6 +113,7 @@ func main() {
 	hub := websocket.GetHub()
 	if hub != nil {
 		hub.OnUserDisconnect = handlers.SetUserOfflineByExtension
+		hub.OnUserConnect = handlers.MarkDeliveredOnConnect
 	}
 
 	// Start background status cleanup service
@@ -279,6 +280,7 @@ func main() {
 			chatRoutes.GET("/conversations", handlers.GetConversations)
 			chatRoutes.GET("/unread-count", handlers.GetUnreadCount)
 			chatRoutes.GET("/:userId", handlers.GetMessages)
+			chatRoutes.DELETE("/:id", handlers.DeleteMessage)
 			chatRoutes.PUT("/read/:senderId", handlers.MarkAsRead)
 			chatRoutes.GET("/voice/:id/audio", handlers.GetVoiceMessageAudio)
 

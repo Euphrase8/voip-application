@@ -76,6 +76,10 @@ func InitDatabase() {
 	// Create composite indexes for performance
 	DB.Exec("CREATE INDEX IF NOT EXISTS idx_messages_sender_receiver ON messages(sender_id, receiver_id)")
 	DB.Exec("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)")
+	// Partial unique index: soft-deleted rows no longer reserve the client_message_id,
+	// so a deleted message can be resent without a unique-constraint collision.
+	DB.Exec("DROP INDEX IF EXISTS idx_messages_sender_client")
+	DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_sender_client ON messages(sender_id, client_message_id) WHERE deleted_at IS NULL")
 	DB.Exec("CREATE INDEX IF NOT EXISTS idx_voicemails_callee ON voicemails(callee_id, created_at)")
 	DB.Exec("CREATE INDEX IF NOT EXISTS idx_conversations_users ON chat_conversations(user1_id, user2_id)")
 

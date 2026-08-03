@@ -1,4 +1,5 @@
 import CONFIG from './config';
+import { getToken } from './login';
 import { checkBrowserCompatibility, getMediaStreamWithFallback } from '../utils/browserCompat';
 import audioManager from './audioManager';
 import webrtcMonitor from '../utils/webrtcMonitor';
@@ -144,6 +145,7 @@ class WebRTCCallService {
       this._connectResolve = resolve;
       this._connectReject = reject;
     });
+    this._connectPromise.catch(() => {});
 
     // Check if WebSocket is available
     if (!window.WebSocket) {
@@ -152,7 +154,9 @@ class WebRTCCallService {
       return;
     }
 
-    const wsUrl = `${CONFIG.WS_URL}?extension=${encodeURIComponent(this.extension)}`;
+    const token = getToken();
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    const wsUrl = `${CONFIG.WS_URL}?extension=${encodeURIComponent(this.extension)}${tokenParam}`;
     console.log('[WebRTCCallService] Connecting to WebSocket:', wsUrl);
 
     try {
@@ -412,7 +416,28 @@ class WebRTCCallService {
   // Handle call rejected by target
   handleCallRejected(message) {
     console.log('[WebRTCCallService] Call rejected by target');
+
+    // Release media/peer connection resources, but keep the signaling
+    // WebSocket alive so future calls can still be initiated.
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+    webrtcMonitor.stopMonitoring();
+    if (this.peerConnection) {
+      this.peerConnection.close();
+      this.peerConnection = null;
+    }
+    this.cleanupLocalMedia();
+    if (this.remoteAudio) {
+      this.remoteAudio.pause();
+      this.remoteAudio.srcObject = null;
+    }
     this.currentCall = null;
+    this.connectionEstablished = false;
+    this.isOfferAnswerExchangeComplete = false;
+    this.iceCandidateBuffer = [];
+
     this.onCallStatusChange && this.onCallStatusChange('Call rejected');
   }
 

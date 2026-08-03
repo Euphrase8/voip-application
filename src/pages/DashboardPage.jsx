@@ -149,6 +149,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   const [voicemailUnread, setVoicemailUnread] = useState(0);
   const [videoCallContact, setVideoCallContact] = useState(null);
   const [videoCallType, setVideoCallType] = useState("outgoing");
+  const [chatContact, setChatContact] = useState(null);
   const [voicemailContact, setVoicemailContact] = useState(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -408,6 +409,24 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     }
   }, [callStatus]);
 
+  // Outgoing call rejected by the callee: stop the calling screen immediately
+  useEffect(() => {
+    if (
+      callStatus === "Call rejected" &&
+      currentPage === "calling" &&
+      activeCallContact &&
+      !incomingCallAcceptedData
+    ) {
+      toast.error(
+        `Call rejected by ${activeCallContact.name || activeCallContact.extension}`
+      );
+      setCallStatus(null);
+      setActiveCallContact(null);
+      setIncomingCallAcceptedData(null);
+      setCurrentPage("keypad");
+    }
+  }, [callStatus, currentPage, activeCallContact, incomingCallAcceptedData]);
+
   const startCall = async (contact) => {
     setActiveCallContact(contact);
     try {
@@ -482,6 +501,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   };
 
   const startChat = (contact) => {
+    setChatContact(contact);
     setCurrentPage("chat");
   };
 
@@ -944,7 +964,13 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       "flex-1 overflow-hidden rounded-xl",
                       darkMode ? "bg-secondary-800" : "bg-white"
                     )}>
-                      <ChatPage darkMode={isDarkMode} currentUser={user} />
+                      <ChatPage
+                        darkMode={isDarkMode}
+                        currentUser={user}
+                        initialContact={chatContact}
+                        onVoiceCall={(contact) => startCall({ extension: contact.extension, name: contact.username })}
+                        onVideoCall={(contact) => startVideoCall(contact)}
+                      />
                     </div>
                   </div>
                 )}
