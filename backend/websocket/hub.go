@@ -38,13 +38,22 @@ type Hub struct {
 
 // Message represents a WebSocket message
 type Message struct {
-	Type      string      `json:"type"`
-	From      string      `json:"from,omitempty"`
-	To        string      `json:"to,omitempty"`
-	Channel   string      `json:"channel,omitempty"`
-	Status    string      `json:"status,omitempty"`
-	Data      interface{} `json:"data,omitempty"`
-	Timestamp int64       `json:"timestamp"`
+	Type         string      `json:"type"`
+	From         string      `json:"from,omitempty"`
+	To           string      `json:"to,omitempty"`
+	Channel      string      `json:"channel,omitempty"`
+	Status       string      `json:"status,omitempty"`
+	Data         interface{} `json:"data,omitempty"`
+	CallID       string      `json:"call_id,omitempty"`
+	FromUsername string      `json:"from_username,omitempty"`
+	CallerID     uint        `json:"caller_id,omitempty"`
+	Offer        interface{} `json:"offer,omitempty"`
+	Answer       interface{} `json:"answer,omitempty"`
+	Candidate    interface{} `json:"candidate,omitempty"`
+	Video        bool        `json:"video,omitempty"`
+	Media        string      `json:"media,omitempty"`
+	Reason       string      `json:"reason,omitempty"`
+	Timestamp    int64       `json:"timestamp"`
 }
 
 // CallMessage represents call-related messages

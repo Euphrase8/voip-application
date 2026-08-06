@@ -84,6 +84,7 @@ type RegisterRequest struct {
 // CallRequest represents call initiation request
 type CallRequest struct {
 	TargetExtension string `json:"target_extension" binding:"required"`
+	Media           string `json:"media"` // "audio" (default) or "video"
 }
 
 // CallAnswerRequest represents call answer request

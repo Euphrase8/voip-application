@@ -30,8 +30,10 @@ import statusService from "../services/statusService";
 import { getVoicemailUnreadCount } from "../services/voicemail";
 import { getWebSocket } from "../services/websocketservice";
 
-import { call, hangupCall } from "../services/call";
+import { call } from "../services/call";
+import { hangupCall as comprehensiveHangup } from "../services/hangupService";
 import webrtcCallService from "../services/webrtcCallService";
+import videoCallService from "../services/videoCallService";
 import ConnectionStatus from "../components/ConnectionStatus";
 import { useTheme } from "../contexts/ThemeContext";
 import notificationService from "../utils/notificationService";
@@ -147,8 +149,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
 
   const [unreadCount, setUnreadCount] = useState(0);
   const [voicemailUnread, setVoicemailUnread] = useState(0);
-  const [videoCallContact, setVideoCallContact] = useState(null);
-  const [videoCallType, setVideoCallType] = useState("outgoing");
   const [chatContact, setChatContact] = useState(null);
   const [voicemailContact, setVoicemailContact] = useState(null);
   const navigate = useNavigate();
@@ -156,35 +156,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
 
   // Use theme context dark mode if available, fallback to prop
   const isDarkMode = themeDarkMode !== undefined ? themeDarkMode : darkMode;
-
-  // Test status service endpoint
-  const testStatusService = async () => {
-    console.log('[Dashboard] Testing status service...');
-    console.log('[Dashboard] Current user data:', {
-      user,
-      username: localStorage.getItem('username'),
-      extension: localStorage.getItem('extension')
-    });
-
-    // First test the endpoint
-    const result = await statusService.testStatusEndpoint();
-    console.log('[Dashboard] Status service test result:', result);
-
-    // Then try a manual status update
-    try {
-      console.log('[Dashboard] Attempting manual status update...');
-      await statusService.updateStatus('online');
-      console.log('[Dashboard] Manual status update successful');
-    } catch (error) {
-      console.error('[Dashboard] Manual status update failed:', error);
-    }
-
-    if (result.success) {
-      alert('Status service test successful! Check console for details.');
-    } else {
-      alert(`Status service test failed: ${result.error}. Check console for details.`);
-    }
-  };
 
   // Load voicemail unread count
   useEffect(() => {
@@ -316,11 +287,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
               icon: "/favicon.ico"
             });
           }
-        } else if (data.type === "video_call_request") {
-          setVideoCallContact({ extension: data.from, username: data.fromUsername, name: data.fromUsername || `Ext ${data.from}`, id: data.caller_id });
-          setVideoCallType("incoming");
-          setCurrentPage("video");
-          toast.info(`Incoming video call from ${data.fromUsername || data.from}`, { duration: 8000 });
         } else if (data.type === "incoming_call" && data.type !== "webrtc_call_invitation") {
           setLocalIncomingCall(data);
         } else if (data.type === "user_status_changed") {
@@ -470,7 +436,8 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   const endCall = async () => {
     if (activeCallContact && callStatus) {
       try {
-        await hangupCall(`PJSIP/${activeCallContact.extension}`);
+        const channel = incomingCallAcceptedData?.channel || `PJSIP/${activeCallContact.extension}`;
+        await comprehensiveHangup(channel);
 
         // Add notification for call ended
         notificationService.callEnded(activeCallContact.extension, 'Unknown duration');
@@ -495,9 +462,11 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
 
 
   const startVideoCall = (contact) => {
-    setVideoCallContact(contact);
-    setVideoCallType("outgoing");
     setCurrentPage("video");
+    videoCallService.startCall(contact).catch((err) => {
+      toast.error(err.message || "Failed to start the video call");
+      setCurrentPage("keypad");
+    });
   };
 
   const startChat = (contact) => {
@@ -640,17 +609,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                 title="Settings"
               >
                 <Settings className="w-4 h-4" />
-              </ResponsiveButton>
-
-              {/* Temporary debugging button */}
-              <ResponsiveButton
-                onClick={testStatusService}
-                variant="ghost"
-                size="sm"
-                className="text-warning-600 hover:bg-warning-50"
-                title="Test Status Service (Debug)"
-              >
-                🔧
               </ResponsiveButton>
 
               <ResponsiveButton
@@ -990,7 +948,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       "flex-1 overflow-hidden rounded-xl",
                       darkMode ? "bg-secondary-800" : "bg-white"
                     )}>
-                      <VideoCallPage darkMode={isDarkMode} user={user} contact={videoCallContact} callType={videoCallType} onEndCall={() => { setCurrentPage('keypad'); setVideoCallContact(null); setVideoCallType("outgoing"); }} />
+                      <VideoCallPage darkMode={isDarkMode} user={user} />
                     </div>
                   </div>
                 )}

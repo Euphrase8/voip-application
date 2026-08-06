@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 	"voip-backend/database"
 	"voip-backend/models"
@@ -240,9 +241,8 @@ func MarkVoicemailRead(c *gin.Context) {
 	now := time.Now()
 	result := db.Model(&models.Voicemail{}).Where("id = ? AND callee_id = ?", id, userID).
 		Updates(map[string]interface{}{
-			"is_read":      true,
-			"read_at":      &now,
-			"playback_count": gorm.Expr("playback_count + 1"),
+			"is_read": true,
+			"read_at": &now,
 		})
 
 	if result.RowsAffected == 0 {
@@ -292,7 +292,9 @@ func DeleteVoicemail(c *gin.Context) {
 	}
 
 	if vm.FilePath != "" {
-		os.Remove(vm.FilePath)
+		if safePath, err := security.SafeFilePath(voicemailDir, vm.FilePath); err == nil {
+			os.Remove(safePath)
+		}
 	}
 	db.Delete(&vm)
 
@@ -342,9 +344,16 @@ func DownloadVoicemail(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Access denied"})
 		return
 	}
-	filename := fmt.Sprintf("voicemail_%s_%s.wav", vm.SenderExtension, vm.CreatedAt.Format("20060102_150405"))
+	contentType := "audio/webm"
+	switch strings.ToLower(filepath.Ext(vm.FilePath)) {
+	case ".wav":
+		contentType = "audio/wav"
+	case ".mp4", ".m4a":
+		contentType = "audio/mp4"
+	}
+	filename := fmt.Sprintf("voicemail_%s_%s%s", vm.SenderExtension, vm.CreatedAt.Format("20060102_150405"), filepath.Ext(vm.FilePath))
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-	c.Header("Content-Type", "audio/wav")
+	c.Header("Content-Type", contentType)
 	c.File(safePath)
 }
 
@@ -450,7 +459,9 @@ func UploadVoicemailGreeting(c *gin.Context) {
 		}
 		db.Create(&greeting)
 	} else {
-		os.Remove(greeting.FilePath)
+		if safeOld, err := security.SafeFilePath(voicemailDir, greeting.FilePath); err == nil {
+			os.Remove(safeOld)
+		}
 		db.Model(&greeting).Updates(map[string]interface{}{
 			"file_path": filePath,
 			"is_active": true,
@@ -470,7 +481,12 @@ func GetVoicemailGreeting(c *gin.Context) {
 		return
 	}
 
-	c.File(greeting.FilePath)
+	safePath, err := security.SafeFilePath(voicemailDir, greeting.FilePath)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Access denied"})
+		return
+	}
+	c.File(safePath)
 }
 
 func UpdateVoicemailSettings(c *gin.Context) {
@@ -566,7 +582,9 @@ func DeleteVoicemailGreeting(c *gin.Context) {
 		return
 	}
 
-	os.Remove(greeting.FilePath)
+	if safePath, err := security.SafeFilePath(voicemailDir, greeting.FilePath); err == nil {
+		os.Remove(safePath)
+	}
 	db.Delete(&greeting)
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Voicemail greeting deleted"})

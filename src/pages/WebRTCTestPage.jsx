@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { updateUserStatus } from '../services/users';
 import webrtcCallService from '../services/webrtcCallService';
+import { call as initiateCall } from '../services/call';
 
 const WebRTCTestPage = () => {
   const [extension, setExtension] = useState('');
@@ -52,7 +53,9 @@ const WebRTCTestPage = () => {
     try {
       setCallStatus('Initiating call...');
       setIsInCall(true);
-      await webrtcCallService.makeCall(targetExtension.trim());
+      const result = await initiateCall(targetExtension.trim());
+      setCallStatus(`Call initiated to ${targetExtension.trim()}`);
+      console.log('[WebRTCTestPage] Call initiated:', result);
     } catch (error) {
       console.error('Call failed:', error);
       setCallStatus(`Call failed: ${error.message}`);

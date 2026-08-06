@@ -233,14 +233,18 @@ func (c *Client) handleMessage(msg Message) {
 	case "hangup":
 		// Handle hangup message
 		if msg.Channel != "" {
-			// Notify other party about hangup
+			// Notify only the other party about the hangup instead of broadcasting
 			hangupMsg := Message{
 				Type:    "call_ended",
 				From:    c.Extension,
 				Channel: msg.Channel,
 				Status:  "ended",
 			}
-			c.hub.BroadcastMessage(hangupMsg)
+			if peer := extensionFromChannel(msg.Channel); peer != "" {
+				c.hub.SendToExtension(peer, hangupMsg)
+			} else {
+				c.hub.BroadcastMessage(hangupMsg)
+			}
 		}
 
 	case "answer_call":
@@ -252,7 +256,11 @@ func (c *Client) handleMessage(msg Message) {
 				Channel: msg.Channel,
 				Status:  "answered",
 			}
-			c.hub.BroadcastMessage(answerMsg)
+			if peer := extensionFromChannel(msg.Channel); peer != "" {
+				c.hub.SendToExtension(peer, answerMsg)
+			} else {
+				c.hub.BroadcastMessage(answerMsg)
+			}
 		}
 
 	case "user_status":
@@ -318,6 +326,12 @@ func (c *Client) handleMessage(msg Message) {
 
 	case "webrtc_call_ended":
 		// Forward call end notification to peer
+		if msg.To != "" {
+			c.hub.SendToExtension(msg.To, msg)
+		}
+
+	case "webrtc_call_cancelled":
+		// Forward call cancellation (caller cancelled while ringing) to peer
 		if msg.To != "" {
 			c.hub.SendToExtension(msg.To, msg)
 		}
@@ -435,6 +449,24 @@ func validateToken(tokenString string) (*auth.Claims, error) {
 		return nil, err
 	}
 	return claims, nil
+}
+
+// extensionFromChannel extracts a numeric extension from a channel identifier.
+// Returns "" if the channel does not contain a resolvable peer extension.
+func extensionFromChannel(channel string) string {
+	if strings.HasPrefix(channel, "PJSIP/") {
+		ext := strings.TrimPrefix(channel, "PJSIP/")
+		ext = strings.SplitN(ext, "-", 2)[0]
+		if len(ext) >= 3 && len(ext) <= 6 {
+			for _, r := range ext {
+				if r < '0' || r > '9' {
+					return ""
+				}
+			}
+			return ext
+		}
+	}
+	return ""
 }
 
 // generateClientID generates a unique client ID

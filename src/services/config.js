@@ -19,10 +19,14 @@ class DynamicConfig {
   // Get API URL dynamically
   get API_URL() {
     if (typeof window !== 'undefined' && window.location) {
-      if (window.location.protocol === 'https:' || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
+      const hostname = window.location.hostname;
+      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+      // Same-origin when served over https or directly from the backend port
+      if (window.location.protocol === 'https:' || window.location.port === '8080') {
         return window.location.origin;
       }
-      return 'http://localhost:8080';
+      // Dev server on another port (e.g. CRA on 3000): backend is on :8080
+      return 'http://' + hostname + ':8080';
     }
 
     return process.env.REACT_APP_API_URL || 'http://localhost:8080';
@@ -31,12 +35,11 @@ class DynamicConfig {
   // Get WebSocket URL dynamically
   get WS_URL() {
     if (typeof window !== 'undefined' && window.location) {
+      const hostname = window.location.hostname;
       if (window.location.protocol === 'https:') {
         return window.location.origin.replace(/^https:/, 'wss:') + '/ws';
-      } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        return 'ws://' + window.location.host + '/ws';
       }
-      return 'ws://localhost:8080/ws';
+      return 'ws://' + hostname + ':8080/ws';
     }
 
     return process.env.REACT_APP_WS_URL || 'ws://localhost:8080/ws';

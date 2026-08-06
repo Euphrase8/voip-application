@@ -51,3 +51,19 @@ frontend.log
 # OS files
 .DS_Store
 Thumbs.db
+
+# TLS certificates / private keys
+backend/certs/
+
+# voicemail recordings
+backend/voicemails/
+
+# sqlite journals
+backend/voip.db-shm
+backend/voip.db-wal
+
+# editor backups
+backend/voip-backend.exe~
+
+# stray temp files
+/0

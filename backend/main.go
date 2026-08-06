@@ -119,6 +119,9 @@ func main() {
 	// Start background status cleanup service
 	services.InitStatusCleanup()
 
+	// Start AMI event consumer to keep call state in sync with Asterisk
+	services.StartAMIEventConsumer()
+
 	// Initialize Asterisk AMI connection asynchronously with timeout
 	go func() {
 		// Wait a bit for the server to start first
@@ -160,8 +163,11 @@ func main() {
 	// Configure trusted proxies for security
 	// Only trust specific proxy IPs in production
 	trustedProxies := []string{
-		"127.0.0.1",      // localhost
-		"172.20.10.0/24", // local network range
+		"127.0.0.1",       // localhost
+		"172.20.10.0/24",  // local network range (legacy hotspot)
+		"172.30.0.0/16",   // WSL2 / current LAN range
+		"192.168.0.0/16",  // common LAN ranges
+		"10.0.0.0/8",
 	}
 	if err := r.SetTrustedProxies(trustedProxies); err != nil {
 		log.Printf("Warning: Failed to set trusted proxies: %v", err)
@@ -192,8 +198,8 @@ func main() {
 		})
 	})
 
-	// Configuration update endpoint (for IP configuration)
-	r.POST("/config/update", func(c *gin.Context) {
+	// Configuration update endpoint (for IP configuration) - requires authentication
+	r.POST("/config/update", middleware.AuthMiddleware(), func(c *gin.Context) {
 		var updateRequest struct {
 			AsteriskHost    string `json:"asterisk_host"`
 			AsteriskAMIPort string `json:"asterisk_ami_port"`
@@ -394,6 +400,40 @@ func main() {
 		log.Printf("Warning: Could not write lock file: %v", err)
 	}
 
+	// Serve the built frontend (if present) so the whole app can run from the
+	// backend over HTTPS on the LAN (required for camera/microphone access).
+	frontendDir := os.Getenv("FRONTEND_DIR")
+	if frontendDir == "" {
+		frontendDir = filepath.Join("..", "build")
+	}
+	if absFrontend, err := filepath.Abs(frontendDir); err == nil {
+		if info, statErr := os.Stat(absFrontend); statErr == nil && info.IsDir() {
+			r.NoRoute(func(c *gin.Context) {
+				path := c.Request.URL.Path
+				// Never swallow API / WebSocket / health / config routes.
+				if strings.HasPrefix(path, "/api") ||
+					strings.HasPrefix(path, "/protected") ||
+					strings.HasPrefix(path, "/ws") ||
+					path == "/health" ||
+					path == "/config" {
+					c.JSON(404, gin.H{"error": "Not found"})
+					return
+				}
+				filePath := filepath.Join(absFrontend, filepath.Clean(path))
+				if strings.HasPrefix(filePath, absFrontend+string(os.PathSeparator)) || filePath == absFrontend {
+					if fileInfo, err := os.Stat(filePath); err == nil && !fileInfo.IsDir() {
+						c.File(filePath)
+						return
+					}
+				}
+				c.File(filepath.Join(absFrontend, "index.html"))
+			})
+			log.Printf("Serving frontend from %s", absFrontend)
+		} else {
+			log.Printf("Frontend directory %s not found, skipping static serving", absFrontend)
+		}
+	}
+
 	// Check port availability and start server
 	host := config.AppConfig.Host
 	port := config.AppConfig.Port
@@ -436,6 +476,40 @@ func main() {
 		}
 	}()
 
+	// HTTPS listener for LAN clients (camera/mic need a secure context)
+	tlsSrv := &http.Server{ Handler: r }
+	tlsPort := os.Getenv("TLS_PORT")
+	if tlsPort == "" {
+		tlsPort = "8443"
+	}
+	certFile := os.Getenv("TLS_CERT_FILE")
+	if certFile == "" {
+		certFile = filepath.Join("certs", "server.crt")
+	}
+	keyFile := os.Getenv("TLS_KEY_FILE")
+	if keyFile == "" {
+		keyFile = filepath.Join("certs", "server.key")
+	}
+	if _, err := os.Stat(certFile); err == nil {
+		if _, err := os.Stat(keyFile); err == nil {
+			lnTLS, err := net.Listen("tcp", net.JoinHostPort(host, tlsPort))
+			if err != nil {
+				log.Printf("Warning: could not start HTTPS on %s: %v", tlsPort, err)
+			} else {
+				go func() {
+					if err := tlsSrv.ServeTLS(lnTLS, certFile, keyFile); err != nil && err != http.ErrServerClosed {
+						log.Printf("Failed to start HTTPS server: %v", err)
+					}
+				}()
+				log.Printf("Starting HTTPS server on https://%s:%s", host, tlsPort)
+			}
+		} else {
+			log.Printf("TLS key %s not found, HTTPS disabled", keyFile)
+		}
+	} else {
+		log.Printf("TLS cert %s not found, HTTPS disabled", certFile)
+	}
+
 	// Wait for interrupt signal for graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -448,6 +522,9 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+	if err := tlsSrv.Shutdown(ctx); err != nil {
+		log.Printf("Warning: HTTPS server forced to shutdown: %v", err)
 	}
 
 	removeLockFile()

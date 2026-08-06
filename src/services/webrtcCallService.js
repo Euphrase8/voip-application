@@ -199,6 +199,8 @@ class WebRTCCallService {
 
         switch (message.type) {
           case 'webrtc_call_invitation':
+            // Video calls are handled by videoCallService; ignore them here.
+            if (message.media === 'video') break;
             this.handleIncomingCallInvitation(message);
             break;
           case 'webrtc_call_accepted':

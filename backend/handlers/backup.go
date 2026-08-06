@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 	"voip-backend/config"
+	"voip-backend/database"
+	"voip-backend/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -394,6 +396,19 @@ func performBackup(backupID string, req BackupRequest, status *BackupStatus) {
 		status.Progress = (currentStep * 100) / totalSteps
 	}
 
+	// Backup call logs
+	if req.IncludeCallLogs {
+		status.Message = "Backing up call logs..."
+		if err := backupCallLogs(zipWriter); err != nil {
+			status.Status = "failed"
+			status.Error = "Failed to backup call logs: " + err.Error()
+			return
+		}
+		metadata.Components = append(metadata.Components, "call_logs")
+		currentStep++
+		status.Progress = (currentStep * 100) / totalSteps
+	}
+
 	// Add metadata to backup
 	status.Message = "Finalizing backup..."
 	metadataBytes, _ := json.Marshal(metadata)
@@ -443,6 +458,26 @@ func backupConfiguration(zipWriter *zip.Writer) error {
 
 	configBytes, _ := json.Marshal(configData)
 	_, err = configFile.Write(configBytes)
+	return err
+}
+
+// backupCallLogs exports call logs as JSON into the zip archive
+func backupCallLogs(zipWriter *zip.Writer) error {
+	callLogsFile, err := zipWriter.Create("call_logs.json")
+	if err != nil {
+		return err
+	}
+
+	var callLogs []map[string]interface{}
+	if err := database.GetDB().Model(&models.CallLog{}).Find(&callLogs).Error; err != nil {
+		return err
+	}
+
+	callLogsBytes, err := json.Marshal(callLogs)
+	if err != nil {
+		return err
+	}
+	_, err = callLogsFile.Write(callLogsBytes)
 	return err
 }
 

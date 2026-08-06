@@ -840,6 +840,19 @@ func initiateWebRTCCall(c *gin.Context, userID uint, username, extension string,
 		return
 	}
 
+	// Create an active call record so the callee is marked busy and the
+	// hangup endpoint can clean up call logs/active calls properly.
+	activeCall := models.ActiveCall{
+		CallerID:  userID,
+		CalleeID:  targetUser.ID,
+		Channel:   callID,
+		Status:    "ringing",
+		StartTime: time.Now(),
+	}
+	if err := database.GetDB().Create(&activeCall).Error; err != nil {
+		log.Printf("[WEBRTC] WARNING: Failed to create active call record: %v", err)
+	}
+
 	// Send WebRTC call invitation via WebSocket
 	if hub != nil {
 		callInvitation := map[string]interface{}{
@@ -849,6 +862,7 @@ func initiateWebRTCCall(c *gin.Context, userID uint, username, extension string,
 			"caller_username":  username,
 			"caller_extension": extension,
 			"target_extension": req.TargetExtension,
+			"media":            req.Media,
 			"timestamp":        time.Now().Format(time.RFC3339),
 		}
 
@@ -867,6 +881,8 @@ func initiateWebRTCCall(c *gin.Context, userID uint, username, extension string,
 			"call_id": callID,
 			"status":  "calling",
 			"target":  req.TargetExtension,
+			"media":   req.Media,
+			"channel": callID,
 		}
 
 		if err := hub.SendToExtension(extension, callerConfirmation); err != nil {
@@ -1466,10 +1482,15 @@ func HoldCall(c *gin.Context) {
 		return
 	}
 
-	// Put the channel on hold using mute/unmute with music
+	// Put the channel on hold using the Asterisk CLI hold command
 	resp2, err := amiClient.SendCommand("Command", map[string]string{
-		"Command": fmt.Sprintf("channel originate %s application MusicOnHold", req.Channel),
+		"Command": fmt.Sprintf("channel hold %s", req.Channel),
 	})
+	if err != nil {
+		log.Printf("[Calls] Failed to hold channel %s: %v", req.Channel, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to hold call: " + err.Error()})
+		return
+	}
 	_ = resp2
 
 	log.Printf("[Calls] Call put on hold: channel=%s, by=%s", req.Channel, extension)

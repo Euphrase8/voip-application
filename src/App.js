@@ -25,6 +25,9 @@ import sipManager from './services/sipManager';
 import ipConfigService from './services/ipConfigService';
 import { testMicrophoneAccess } from './utils/microphoneDiagnostics';
 import MicrophoneTestPage from './pages/MicrophoneTestPage';
+import videoCallService from './services/videoCallService';
+import IncomingCallOverlay from './components/calls/IncomingCallOverlay';
+import VideoCallScreen from './components/calls/VideoCallScreen';
 
 const App = () => {
   const navigate = useNavigate();
@@ -44,6 +47,9 @@ const App = () => {
 
   useEffect(() => {
     const token = localStorage.getItem('token');
+
+    // Start listening for video call signaling on the shared WebSocket.
+    videoCallService.init();
 
     // Check if IP configuration is required first (skip if already authed)
     if (!ipConfigService.isConfigured() && !token) {
@@ -305,13 +311,7 @@ const App = () => {
         />
         <Route
           path="/callings"
-          element={token ? <VoipPhone
-            extension={user?.extension || ''}
-            sipPassword={sipPassword}
-            darkMode={darkMode}
-            toggleDarkMode={() => setDarkMode(!darkMode)}
-            setIsLoading={setIsLoading}
-          /> : <Navigate to="/login" replace />}
+          element={<Navigate to="/calling" replace />}
         />
         <Route
           path="/callLogs"
@@ -336,7 +336,7 @@ const App = () => {
         />
         <Route
           path="/microphone-test"
-          element={<MicrophoneTestPage darkMode={darkMode} />}
+          element={token ? <MicrophoneTestPage darkMode={darkMode} /> : <Navigate to="/login" replace />}
         />
         <Route path="/" element={
           ipConfigService.isConfigured()
@@ -344,6 +344,10 @@ const App = () => {
             : <Navigate to="/ip-config" replace />
         } />
       </Routes>
+
+      {/* Global video call UI */}
+      <IncomingCallOverlay />
+      <VideoCallScreen />
       {isLoading && <Loader />}
 
       {/* Microphone Fix Dialog */}
