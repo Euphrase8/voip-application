@@ -233,7 +233,15 @@ func main() {
 	if err != nil {
 		fatal("create server certificate", err)
 	}
-	if err := writePEM(filepath.Join(outDir, "server.crt"), "CERTIFICATE", serverDER, 0o644); err != nil {
+
+	// server.crt = leaf + CA bundle so the server presents the full chain
+	// (required by many clients, e.g. Android/iOS, to build a trust path).
+	bundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
+	caCertPEM, err := os.ReadFile(filepath.Join(outDir, "ca.crt"))
+	if err == nil {
+		bundle = append(bundle, caCertPEM...)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "server.crt"), bundle, 0o644); err != nil {
 		fatal("write server.crt", err)
 	}
 	if err := writePEM(filepath.Join(outDir, "server.key"), "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(serverKey), 0o600); err != nil {
