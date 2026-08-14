@@ -194,7 +194,7 @@ func main() {
 	r.GET("/config", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"success": true,
-			"config":  config.AppConfig.GetFrontendConfig(),
+			"config":  config.AppConfig.GetFrontendConfigForRequest(c.Request),
 		})
 	})
 

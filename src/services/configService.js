@@ -76,33 +76,35 @@ class ConfigService {
     }
   }
 
-  // Get possible backend host locations
+    // Get possible backend host locations
   _getPossibleBackendHosts() {
     const currentHost = window.location.hostname;
     const protocol = window.location.protocol;
+    const currentPort = window.location.port;
 
     // Get configured backend URL if available
     const configuredBackendUrl = ipConfigService.isConfigured()
       ? ipConfigService.getBackendUrl()
       : null;
 
+    // The page's own origin (highest priority): when the app is served by the
+    // backend itself, /config is available at the exact same origin over the
+    // same scheme (https/wss included). On a CRA dev server this falls through.
+    const sameOrigin = currentPort && !['80', '443'].includes(currentPort)
+      ? `${protocol}//${currentHost}:${currentPort}`
+      : `${protocol}//${currentHost}`;
+
     return [
-      // Environment-specific (highest priority)
+      sameOrigin,
+
+      // Environment-specific
       ...(process.env.REACT_APP_API_URL ? [process.env.REACT_APP_API_URL] : []),
 
-      // User-configured backend (high priority)
+      // User-configured backend
       ...(configuredBackendUrl ? [configuredBackendUrl] : []),
 
-      // Known backend server IP (for network access)
-      'http://localhost:8080',
-
-      // Same host as frontend (common in development)
+      // Same host, backend port
       `${protocol}//${currentHost}:8080`,
-
-      // Current network variations
-      ...(currentHost !== 'localhost' && currentHost !== '127.0.0.1' ? [
-        `${protocol}//${currentHost}:8080`,
-      ] : []),
 
       // Localhost variations (lowest priority for network access)
       `http://localhost:8080`,
@@ -117,6 +119,11 @@ class ConfigService {
   // Fallback configuration when backend is unreachable
   _getFallbackConfig() {
     const currentHost = window.location.hostname;
+    const protocol = window.location.protocol;
+    const isHttps = protocol === 'https:';
+    const wsProtocol = isHttps ? 'wss:' : 'ws:';
+    // On HTTPS the backend serves everything from the same origin (no :8080).
+    const portSuffix = isHttps ? '' : ':8080';
 
     // Use configured IPs if available, otherwise use defaults
     let backendHost, asteriskHost;
@@ -134,11 +141,11 @@ class ConfigService {
     }
 
     return {
-      api_url: `http://${backendHost}:8080`,
-      ws_url: `ws://${backendHost}:8080/ws`,
+      api_url: `${protocol}//${backendHost}${portSuffix}`,
+      ws_url: `${wsProtocol}//${backendHost}${portSuffix}/ws`,
       asterisk: {
         host: asteriskHost,
-        ws_url: `ws://${asteriskHost}:8088/ws`,
+        ws_url: `${wsProtocol}//${asteriskHost}:8088/ws`,
       },
       environment: 'development',
       debug: true,

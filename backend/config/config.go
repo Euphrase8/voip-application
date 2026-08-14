@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ type Config struct {
 
 	// Asterisk Configuration
 	AsteriskHost        string
+	AsteriskAMIHost     string
 	AsteriskAMIPort     string
 	AsteriskAMIUsername string
 	AsteriskAMISecret   string
@@ -69,6 +71,7 @@ func LoadConfig() {
 		JWTExpiryHours:      getEnvAsInt("JWT_EXPIRY_HOURS", 24),
 		DBPath:              getEnv("DB_PATH", "./voip.db"),
 		AsteriskHost:        getEnv("ASTERISK_HOST", "asterisk.local"),
+		AsteriskAMIHost:     getEnv("ASTERISK_AMI_HOST", ""),
 		AsteriskAMIPort:     getEnv("ASTERISK_AMI_PORT", "5038"),
 		AsteriskAMIUsername: getEnv("ASTERISK_AMI_USERNAME", "admin"),
 		AsteriskAMISecret:   getEnv("ASTERISK_AMI_SECRET", "amp111"),
@@ -140,6 +143,13 @@ func (c *Config) resolveHosts() {
 	// Resolve Asterisk host
 	c.AsteriskHost = c.resolveAsteriskHost()
 	c.SIPDomain = c.AsteriskHost
+
+	// AMI may dial a different (local) address than the host exposed to clients.
+	// Default to the resolved Asterisk host when ASTERISK_AMI_HOST is unset.
+	if c.AsteriskAMIHost == "" {
+		c.AsteriskAMIHost = c.AsteriskHost
+	}
+	log.Printf("[Config] Resolved AMI host: %s", c.AsteriskAMIHost)
 
 	// Resolve public host for frontend connections
 	if c.PublicHost == "" {
@@ -249,9 +259,30 @@ func (c *Config) isHostReachable(host, port string) bool {
 
 // GetFrontendConfig returns configuration for frontend consumption
 func (c *Config) GetFrontendConfig() map[string]interface{} {
+	return c.GetFrontendConfigForRequest(nil)
+}
+
+// GetFrontendConfigForRequest returns frontend configuration with URLs built
+// from the actual request (scheme + Host), so HTTPS pages automatically receive
+// https/wss URLs on the same origin the page was served from.
+func (c *Config) GetFrontendConfigForRequest(r *http.Request) map[string]interface{} {
+	scheme := "http"
+	if r != nil && r.TLS != nil {
+		scheme = "https"
+	}
+	host := ""
+	if r != nil && r.Host != "" {
+		host = r.Host
+	} else {
+		host = c.PublicHost + ":" + c.Port
+	}
+	wsScheme := "ws"
+	if scheme == "https" {
+		wsScheme = "wss"
+	}
 	return map[string]interface{}{
-		"api_url": c.GetAPIURL(),
-		"ws_url":  c.GetWebSocketURL(),
+		"api_url": scheme + "://" + host,
+		"ws_url":  wsScheme + "://" + host + "/ws",
 		"asterisk": map[string]string{
 			"host":   c.AsteriskHost,
 			"ws_url": c.GetAsteriskWebSocketURL(),
@@ -278,7 +309,7 @@ func (c *Config) GetAsteriskWebSocketURL() string {
 	return "ws://" + c.AsteriskHost + ":" + c.SIPPort + "/ws"
 }
 
-// GetAsteriskAMIAddress returns the Asterisk AMI address
+// GetAsteriskAMIAddress returns the Asterisk AMI address (loopback-safe host)
 func (c *Config) GetAsteriskAMIAddress() string {
-	return c.AsteriskHost + ":" + c.AsteriskAMIPort
+	return c.AsteriskAMIHost + ":" + c.AsteriskAMIPort
 }

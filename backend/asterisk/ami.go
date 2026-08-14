@@ -68,7 +68,7 @@ func InitAMI() error {
 	amiMutex.Lock()
 	defer amiMutex.Unlock()
 
-	log.Printf("Initializing AMI connection to %s:%s...", config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
+	log.Printf("Initializing AMI connection to %s...", config.AppConfig.GetAsteriskAMIAddress())
 
 	client, err := NewAMIClient()
 	if err != nil {
@@ -182,7 +182,7 @@ func reconnectAMI() error {
 
 // NewAMIClient creates a new AMI client
 func NewAMIClient() (*AMIClient, error) {
-	address := net.JoinHostPort(config.AppConfig.AsteriskHost, config.AppConfig.AsteriskAMIPort)
+	address := config.AppConfig.GetAsteriskAMIAddress()
 
 	log.Printf("Attempting to connect to Asterisk AMI at %s...", address)
 	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
