@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +46,17 @@ var upgrader = websocket.Upgrader{
 				if strings.EqualFold(origin, allowed) {
 					return true
 				}
+			}
+		}
+		// Allow same-origin connections (the backend serves the frontend itself,
+		// e.g. https://192.168.1.8 or http://localhost:8080).
+		if u, err := url.Parse(origin); err == nil && u.Hostname() != "" {
+			reqHost := r.Host
+			if h, _, err := net.SplitHostPort(reqHost); err == nil {
+				reqHost = h
+			}
+			if strings.EqualFold(u.Hostname(), reqHost) {
+				return true
 			}
 		}
 		// Also allow file:// and capacitor:// for development
@@ -410,14 +423,15 @@ func HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	// Check for duplicate connections (max 3 per extension)
+	// Check for duplicate connections (max 3 per extension). When the cap is
+	// reached, replace the oldest connection rather than rejecting the new one,
+	// so a leaked/stale client can never lock out reconnects.
 	hub := GetHub()
 	if hub != nil {
 		clientCount := hub.GetExtensionClientCount(extension)
 		if clientCount >= 3 {
-			log.Printf("[WS] Too many connections for extension %s: %d", extension, clientCount)
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many connections for this extension"})
-			return
+			log.Printf("[WS] Too many connections for extension %s: %d - disconnecting oldest", extension, clientCount)
+			hub.DisconnectOldestForExtension(extension)
 		}
 	}
 

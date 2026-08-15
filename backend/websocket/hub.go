@@ -406,6 +406,42 @@ func (h *Hub) SetUserOfflineOnDisconnect(extension string) {
 	}
 }
 
+// DisconnectOldestForExtension forcibly closes the oldest WebSocket client for
+// an extension. Used when the per-extension connection cap is reached so a
+// stale/orphaned client can never permanently block a fresh connection.
+func (h *Hub) DisconnectOldestForExtension(extension string) *Client {
+	if extension == "" {
+		return nil
+	}
+
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	clients, exists := h.extensionClients[extension]
+	if !exists || len(clients) == 0 {
+		return nil
+	}
+
+	oldest := clients[0]
+	clients = clients[1:]
+	if len(clients) == 0 {
+		delete(h.extensionClients, extension)
+	} else {
+		h.extensionClients[extension] = clients
+	}
+
+	if _, ok := h.clients[oldest]; ok {
+		delete(h.clients, oldest)
+		h.safeCloseSend(oldest)
+		if oldest.conn != nil {
+			oldest.conn.Close()
+		}
+	}
+
+	log.Printf("Disconnected oldest client %s for extension %s to make room", oldest.ID, extension)
+	return oldest
+}
+
 // DisconnectExtension forcefully closes every WebSocket client for an extension.
 // Used by admin operations (delete user / delete all users / disable account) so a
 // removed or disabled user is immediately dropped from all active sessions.

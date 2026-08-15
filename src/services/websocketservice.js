@@ -6,8 +6,8 @@ let reconnectTimeout = null;
 let reconnectAttempts = 0;
 let currentExtension = null;
 let currentToken = null;
-const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL = 5000;
+const RECONNECT_MAX_INTERVAL = 30000;
 
 // Event listener system for WebSocket messages
 const messageListeners = new Set();
@@ -53,7 +53,12 @@ const setupSocketHandlers = () => {
   if (!socket) return;
 
   socket.onmessage = (event) => {
-    notifyListeners(event);
+    const raw = typeof event.data === 'string' ? event.data : '';
+    const chunks = raw.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (chunks.length === 0) return;
+    for (const chunk of chunks) {
+      notifyListeners({ data: chunk });
+    }
   };
 
   socket.onopen = () => {
@@ -73,15 +78,12 @@ const setupSocketHandlers = () => {
   socket.onclose = (event) => {
     console.warn(`[websocketservice] WebSocket closed with code ${event.code}: ${event.reason || 'No reason provided'}`);
     notifyConnectionStatus(false);
-    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-      reconnectAttempts += 1;
-      console.log(`[websocketservice] Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}) in ${RECONNECT_INTERVAL}ms...`);
-      reconnectTimeout = setTimeout(() => {
-        connectWebSocket(currentExtension, url);
-      }, RECONNECT_INTERVAL);
-    } else {
-      console.error('[websocketservice] Max reconnect attempts reached. Giving up.');
-    }
+    reconnectAttempts += 1;
+    const delay = Math.min(RECONNECT_INTERVAL * Math.pow(2, reconnectAttempts - 1), RECONNECT_MAX_INTERVAL);
+    console.log(`[websocketservice] Reconnecting (attempt ${reconnectAttempts}) in ${delay}ms...`);
+    reconnectTimeout = setTimeout(() => {
+      connectWebSocket(currentExtension, url);
+    }, delay);
   };
 };
 
@@ -92,7 +94,7 @@ export const connectWebSocket = (extension = null, wsUrl = CONFIG.WS_URL) => {
   const targetExtension = extension || localStorage.getItem('extension');
   const token = getToken();
 
-  if (socket && socket.readyState === WebSocket.OPEN && currentExtension === targetExtension) {
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) && currentExtension === targetExtension) {
     return socket;
   }
 
@@ -180,6 +182,11 @@ export const getConnectionStatus = () => {
 
 // Close WebSocket connection
 export const closeWebSocket = () => {
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  reconnectAttempts = 0;
   if (socket) {
     socket.close();
     socket = null;
