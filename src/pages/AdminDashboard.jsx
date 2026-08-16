@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import {
   FiUsers as Users,
   FiPhone as Phone,
@@ -2410,6 +2411,7 @@ const SettingsTab = ({
   onUpdateSystemHealth,
   setShowAsteriskDiagnostics
 }) => {
+  const navigate = useNavigate();
   const [settings, setSettings] = useState({
     autoRefresh: true,
     refreshInterval: 30,
@@ -2673,6 +2675,26 @@ const SettingsTab = ({
                 onChange={(e) => handleSettingChange('enableDebugMode', e.target.checked)}
                 className="w-4 h-4 text-primary-600 rounded focus:ring-primary-500"
               />
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => navigate('/ip-config')}
+                className={cn(
+                  'w-full py-2.5 px-4 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors',
+                  'text-white bg-primary-600 hover:bg-primary-700'
+                )}
+              >
+                <Settings className="w-4 h-4" />
+                Server / Network Configuration
+              </button>
+              <p className={cn(
+                'mt-1.5 text-xs',
+                darkMode ? 'text-secondary-500' : 'text-secondary-400'
+              )}>
+                Edit Asterisk / network settings, regenerate certificates, and re-test connections.
+              </p>
             </div>
           </div>
         </motion.div>

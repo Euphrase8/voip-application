@@ -79,9 +79,13 @@ func GetServerInfo(c *gin.Context) {
 			"port": config.AppConfig.Port,
 		},
 		"asterisk": gin.H{
-			"host":     asteriskHostForForm(),
-			"sip_port": config.AppConfig.SIPPort,
-			"ami_port": config.AppConfig.AsteriskAMIPort,
+			"host":       asteriskHostForForm(),
+			"sip_domain": config.AppConfig.SIPDomain,
+			"sip_port":   config.AppConfig.SIPPort,
+			"ami_port":   config.AppConfig.AsteriskAMIPort,
+			"ami_user":   config.AppConfig.AsteriskAMIUsername,
+			"ssh_user":   config.AppConfig.AsteriskSSHUser,
+			"ssh_port":   config.AppConfig.AsteriskSSHPort,
 		},
 		"tls": gin.H{
 			"enabled":      certExists,

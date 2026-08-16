@@ -22,7 +22,6 @@ import BrowserCompatibilityAlert from './components/BrowserCompatibilityAlert';
 import MicrophoneFix from './components/MicrophoneFix';
 import MicrophoneTroubleshooter from './components/MicrophoneTroubleshooter';
 import sipManager from './services/sipManager';
-import ipConfigService from './services/ipConfigService';
 import { testMicrophoneAccess } from './utils/microphoneDiagnostics';
 import MicrophoneTestPage from './pages/MicrophoneTestPage';
 import videoCallService from './services/videoCallService';
@@ -68,27 +67,41 @@ const App = () => {
     // Decide whether the setup page is required. The server-side state is the
     // source of truth so that once setup is complete, user devices go straight
     // to the app instead of loading /ip-config.
-    const decideSetup = async () => {
-      let configured = null;
+    const tryStatus = async (url) => {
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(setupStatusUrl(), { signal: controller.signal });
+        const res = await fetch(url, { signal: controller.signal });
         clearTimeout(timeout);
         if (res.ok) {
           const data = await res.json();
-          configured = !!(data.success && data.configured);
+          return !!(data.success && data.configured);
         }
       } catch (e) {}
+      return null;
+    };
 
-      // Backend unreachable: fall back to the per-device flag.
+    const decideSetup = async () => {
+      let configured = await tryStatus(setupStatusUrl());
       if (configured === null) {
-        configured = ipConfigService.isConfigured();
+        // The same-origin probe (usually HTTPS) failed — most commonly because
+        // the CA certificate isn't installed on this fresh device yet, NOT
+        // because setup is missing. Probe the plain-HTTP backend port instead
+        // (no certificate check) to distinguish "not configured yet" from
+        // "configured but cert not trusted".
+        const { hostname, port } = window.location;
+        if (port !== '8080') {
+          configured = await tryStatus(`http://${hostname}:8080/api/setup/status`);
+        }
       }
       setSetupConfigured(configured);
 
-      // Require IP configuration first (only when not already authed).
-      if (!configured && !token) {
+      // Require IP configuration first (only when not already authed AND the
+      // server explicitly reports that setup was never completed). When the
+      // server is unreachable we never force the config page, so an already
+      // configured system never sends new devices there just because their
+      // browser does not yet trust our self-signed certificate.
+      if (configured === false && !token) {
         console.log('[App.js] IP configuration required, redirecting to /ip-config');
         if (window.location.pathname !== '/ip-config') {
           navigate('/ip-config', { replace: true });

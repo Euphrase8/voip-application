@@ -18,19 +18,17 @@ class NetworkDiagnostics {
       discovered: [],
       tested: [],
       recommended: null,
+      serverInfo: await this.getServerInfo(),
       networkInfo: await this.getNetworkInfo()
     };
 
     // Get potential IP ranges to scan
     const ipRanges = this.generateIPRanges(results.networkInfo);
-    
-    // Test known IPs first
-    const knownIPs = [
-      '192.168.1.2',  // This PC / common LAN IP
-      'localhost',
-      '127.0.0.1',
-      'asterisk.local'
-    ];
+
+    // Test the real addresses first (origin host, primary IP, all local IPs,
+    // hostname). Loopback is only a last resort so the recommended host is
+    // actually usable by other devices instead of being "localhost".
+    const knownIPs = this.buildCandidateHosts(results.serverInfo);
 
     // Test known IPs first
     for (const ip of knownIPs) {
@@ -63,6 +61,58 @@ class NetworkDiagnostics {
     }
 
     return results;
+  }
+
+  // Fetch the backend's real network + Asterisk configuration so discovery and
+  // the generated configuration reflect the actual deployment instead of
+  // guessing "localhost". Best-effort: never fails the whole discovery.
+  async getServerInfo() {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(`${CONFIG.API_URL}/api/server-info`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.success) {
+        this._serverInfo = data;
+        return data;
+      }
+    } catch (e) {
+      console.warn('[networkDiagnostics] server-info unavailable:', e.message);
+    }
+    return null;
+  }
+
+  // Ordered candidate hosts to probe: the real, reachable addresses first.
+  buildCandidateHosts(serverInfo) {
+    const hosts = [];
+    const seen = new Set();
+    const add = (host) => {
+      if (!host || seen.has(host)) return;
+      seen.add(host);
+      hosts.push(host);
+    };
+
+    // The host the admin actually reached the app on is the safest recommendation.
+    const { hostname } = window.location;
+    if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
+      add(hostname);
+    }
+
+    if (serverInfo?.server) {
+      add(serverInfo.server.primary_ip);
+      (serverInfo.server.all_ips || []).forEach(add);
+      add(serverInfo.server.hostname);
+    }
+
+    // Fallbacks
+    add('192.168.1.2');
+    add('localhost');
+    add('127.0.0.1');
+    add('asterisk.local');
+
+    return hosts;
   }
 
   // Test a specific IP for Asterisk services
@@ -289,7 +339,13 @@ class NetworkDiagnostics {
   // Select the best server from discovered servers
   selectBestServer(servers) {
     if (servers.length === 0) return null;
-    
+
+    // Never recommend a loopback address when a real host was discovered —
+    // "localhost" is only usable on the server itself, not other devices.
+    const isLoopback = (ip) => !ip || ip === 'localhost' || ip === '127.0.0.1' || ip === '::1';
+    const real = servers.filter((s) => !isLoopback(s.ip));
+    if (real.length > 0) servers = real;
+
     // Sort by score (highest first)
     const sorted = servers.sort((a, b) => b.score - a.score);
     
@@ -320,32 +376,56 @@ class NetworkDiagnostics {
   generateConfiguration(server) {
     if (!server) return null;
 
+    const info = this._serverInfo || {};
+    const ast = info.asterisk || {};
+    const sipPort = ast.sip_port || '8088';
+    const amiPort = ast.ami_port || '5038';
+    const asteriskHost = ast.host || server.ip;
+    const sipDomain = ast.sip_domain || asteriskHost;
+    const amiUser = ast.ami_user || 'admin';
+    const sshUser = ast.ssh_user || '';
+    const sshPort = ast.ssh_port || '22';
+
+    // The host the browser reached the app on (never a loopback after discovery).
+    const reachableHost = server.ip;
+
+    // SSH targets where Asterisk actually runs when it isn't loopback, so the
+    // admin can reach it; otherwise fall back to the reachable host.
+    const isLoopback = (h) => !h || h === 'localhost' || h === '127.0.0.1' || h === '::1';
+    const sshHost = isLoopback(asteriskHost) ? reachableHost : asteriskHost;
+
     return {
       // Backend environment variables
       backend: {
-        ASTERISK_HOST: server.ip,
-        ASTERISK_AMI_PORT: '5038',
-        ASTERISK_AMI_USERNAME: 'admin',
-        ASTERISK_AMI_SECRET: 'amp111',
-        SIP_DOMAIN: server.ip,
-        SIP_PORT: '8088'
+        ASTERISK_HOST: asteriskHost,
+        ASTERISK_AMI_PORT: amiPort,
+        ASTERISK_AMI_USERNAME: amiUser,
+        ASTERISK_AMI_SECRET: '(your backend/.env ASTERISK_AMI_SECRET)',
+        SIP_DOMAIN: sipDomain,
+        SIP_PORT: sipPort
       },
-      
-      // Frontend environment variables
+
+      // Frontend environment variables (optional — the app auto-detects these
+      // when they are unset, so only set them to force a specific server).
       frontend: {
-        REACT_APP_SIP_SERVER: server.ip,
-        REACT_APP_SIP_PORT: '8088',
-        REACT_APP_SIP_WS_URL: `ws://${server.ip}:8088/ws`,
-        REACT_APP_CLIENT_IP: 'localhost'
+        REACT_APP_SIP_SERVER: reachableHost,
+        REACT_APP_SIP_PORT: sipPort,
+        REACT_APP_SIP_WS_URL: `ws://${reachableHost}:${sipPort}/ws`,
+        REACT_APP_CLIENT_IP: reachableHost
       },
 
       // SSH connection info
       ssh: {
-        command: `ssh kali@${server.ip}`,
-        password: 'kali',
-        ip: server.ip,
-        port: 22
-      }
+        command: `ssh ${sshUser || 'asterisk'}@${sshHost}`,
+        password: '(your Asterisk SSH password)',
+        ip: sshHost,
+        port: sshPort
+      },
+
+      notes: [
+        'Values in parentheses are not stored in the app — copy them from backend/.env on the server.',
+        'Frontend variables are optional: the app auto-detects the SIP/WebSocket server when they are unset.'
+      ]
     };
   }
 }

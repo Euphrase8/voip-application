@@ -583,6 +583,23 @@ const ConfigurationDisplay = ({ server, darkMode }) => {
         </div>
       </div>
 
+      {/* Notes */}
+      {config.notes && config.notes.length > 0 && (
+        <div>
+          <h4 className="font-medium mb-3">Notes</h4>
+          <div className={cn(
+            "p-4 rounded-lg border text-sm",
+            darkMode ? "bg-secondary-800 border-secondary-700 text-secondary-300" : "bg-secondary-50 border-secondary-200 text-secondary-600"
+          )}>
+            <ul className="space-y-1.5">
+              {config.notes.map((note, index) => (
+                <li key={index}>• {note}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* Quick Setup Instructions */}
       <div>
         <h4 className="font-medium mb-3">Quick Setup Instructions</h4>

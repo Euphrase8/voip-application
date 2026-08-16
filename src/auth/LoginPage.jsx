@@ -10,7 +10,8 @@ import {
   FiShield as Shield,
   FiMoon as Moon,
   FiSun as Sun,
-  FiArrowRight as ArrowRight
+  FiArrowRight as ArrowRight,
+  FiDownload as Download
 } from "react-icons/fi";
 import { login } from "../services/login";
 import { useTheme } from "../contexts/ThemeContext";
@@ -26,6 +27,14 @@ const LoginPage = ({ onLogin, onSwitchToRegister }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { darkMode, toggleDarkMode } = useTheme();
+
+  // URL of the public CA certificate endpoint so users can install the local CA
+  // on their phone/laptop and trust the encrypted HTTPS/WebRTC connections.
+  const caDownloadUrl = () => {
+    const { hostname, port } = window.location;
+    if (port === '3000') return `http://${hostname}:8080/api/server-info/ca.crt`;
+    return `${window.location.origin}/api/server-info/ca.crt`;
+  };
 
   useEffect(() => {
     // Show success message if redirected from registration
@@ -347,16 +356,51 @@ const LoginPage = ({ onLogin, onSwitchToRegister }) => {
 
         {/* Footer */}
         <div className={cn(
-          'px-8 py-4 border-t text-center',
+          'px-8 py-4 border-t',
           darkMode ? 'border-secondary-700' : 'border-secondary-200'
         )}>
-          <div className="flex items-center justify-center space-x-2 text-xs">
-            <Phone className="w-4 h-4 text-primary-500" />
-            <span className={cn(
-              darkMode ? 'text-secondary-400' : 'text-secondary-500'
-            )}>
-              Professional VoIP System
-            </span>
+          <div className="flex flex-col items-center gap-1.5">
+            <a
+              href={caDownloadUrl()}
+              download="voip-local-ca.crt"
+              className={cn(
+                'inline-flex items-center gap-1.5 text-xs font-medium transition-colors',
+                darkMode
+                  ? 'text-primary-400 hover:text-primary-300'
+                  : 'text-primary-600 hover:text-primary-500'
+              )}
+              title="Install the local CA certificate to trust encrypted calls on this device"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download CA certificate
+            </a>
+            <details className="w-full">
+              <summary className={cn(
+                'cursor-pointer text-[11px] text-center transition-colors',
+                darkMode ? 'text-secondary-500 hover:text-secondary-300' : 'text-secondary-400 hover:text-secondary-600'
+              )}>
+                How to install it
+              </summary>
+              <div className={cn(
+                'mt-2 text-left text-[11px] leading-relaxed rounded-lg p-3',
+                darkMode ? 'bg-secondary-800 text-secondary-300' : 'bg-secondary-50 text-secondary-600'
+              )}>
+                <p><span className="font-medium">Windows:</span> run the file, Install Certificate → Local Machine → Trusted Root Certification Authorities.</p>
+                <p className="mt-1"><span className="font-medium">macOS:</span> Keychain Access → drag into System → double-click → Always Trust.</p>
+                <p className="mt-1"><span className="font-medium">iOS:</span> open the file, install the profile, then Settings → General → About → Certificate Trust Settings → enable full trust.</p>
+                <p className="mt-1"><span className="font-medium">Android:</span> Settings → Security → Install a certificate → CA certificate.</p>
+                <p className="mt-1"><span className="font-medium">Linux:</span> <code>sudo cp ca.crt /usr/local/share/ca-certificates/ &amp;&amp; sudo update-ca-certificates</code></p>
+                <p className="mt-1"><span className="font-medium">Firefox:</span> Settings → Certificates → View Certificates → Authorities → Import.</p>
+              </div>
+            </details>
+            <div className="flex items-center justify-center space-x-2 text-xs pt-1">
+              <Phone className="w-4 h-4 text-primary-500" />
+              <span className={cn(
+                darkMode ? 'text-secondary-400' : 'text-secondary-500'
+              )}>
+                Professional VoIP System
+              </span>
+            </div>
           </div>
         </div>
       </motion.div>
