@@ -1,14 +1,14 @@
 param(
     [string]$AsteriskHost = "",
-    [string]$AmiHost = "127.0.0.1",
-    [string]$AmiPort = "5038",
-    [string]$AmiUser = "admin",
+    [string]$AmiHost = "",
+    [string]$AmiPort = "",
+    [string]$AmiUser = "",
     [string]$AmiSecret = "",
     [string]$SipDomain = "",
-    [string]$SipPort = "8088",
+    [string]$SipPort = "",
     [string]$PublicHost = "",
-    [string]$HostAddr = "0.0.0.0",
-    [string]$Port = "8080"
+    [string]$HostAddr = "",
+    [string]$Port = ""
 )
 
 # Only override the .env values when explicitly passed on the command line.
@@ -26,7 +26,7 @@ if ($HostAddr)     { $env:HOST = $HostAddr }
 if ($Port)         { $env:PORT = $Port }
 
 Write-Host "Starting VoIP backend..."
-Write-Host "  AMI: ${AmiHost}:${AmiPort}"
-Write-Host "  Listening: ${HostAddr}:${Port}"
+Write-Host "  AMI: $($env:ASTERISK_AMI_HOST):$($env:ASTERISK_AMI_PORT)"
+Write-Host "  Listening: $($env:HOST):$($env:PORT)"
 
 & ".\voip-backend.exe"

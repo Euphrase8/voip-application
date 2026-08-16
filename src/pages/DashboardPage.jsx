@@ -231,6 +231,14 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
         (status) => {
           console.log('[Dashboard] WebRTC call status:', status);
           setCallStatus(status);
+        },
+        () => {
+          console.log('[Dashboard] WebRTC call ended by peer');
+          setLocalIncomingCall(null);
+          setCallStatus(null);
+          setActiveCallContact(null);
+          setIncomingCallAcceptedData(null);
+          toast('Call ended', { duration: 3000 });
         }
       );
 
@@ -315,7 +323,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
         setActiveCallContact(data.contact);
       }
       setCallStatus('Connected');
-      setCurrentPage('calling');
     };
 
     const handleRejected = () => {
@@ -379,7 +386,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   useEffect(() => {
     if (
       callStatus === "Call rejected" &&
-      currentPage === "calling" &&
       activeCallContact &&
       !incomingCallAcceptedData
     ) {
@@ -389,9 +395,8 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
       setCallStatus(null);
       setActiveCallContact(null);
       setIncomingCallAcceptedData(null);
-      setCurrentPage("keypad");
     }
-  }, [callStatus, currentPage, activeCallContact, incomingCallAcceptedData]);
+  }, [callStatus, activeCallContact, incomingCallAcceptedData]);
 
   const startCall = async (contact) => {
     setActiveCallContact(contact);
@@ -407,8 +412,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
       const { channel } = await call(contact.extension);
       setCallStatus("Connected");
       notificationService.callConnected(contact.extension);
-
-      setCurrentPage("calling");
     } catch (error) {
       console.error("[Dashboard] Call error:", error);
       setCallStatus("Call failed");
@@ -430,7 +433,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
       setActiveCallContact(acceptedData.contact);
     }
     setCallStatus('Initializing Communication');
-    setCurrentPage("calling");
   };
 
   const endCall = async () => {
@@ -456,7 +458,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     setCallStatus(null);
     setActiveCallContact(null);
     setIncomingCallAcceptedData(null);
-    setCurrentPage("keypad");
   };
 
 
@@ -525,6 +526,21 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
             if (setIncomingCall) setIncomingCall(null);
           }}
           onSwitchToCallPage={handleIncomingCallAccepted}
+        />
+      )}
+
+      {/* Active Call Popup */}
+      {activeCallContact && callStatus && (
+        <CallingPage
+          contact={activeCallContact}
+          callStatus={callStatus}
+          onEndCall={endCall}
+          channel={incomingCallAcceptedData?.channel || `PJSIP/${activeCallContact.extension}`}
+          darkMode={isDarkMode}
+          isOutgoing={!incomingCallAcceptedData}
+          callAccepted={!!incomingCallAcceptedData}
+          isWebRTCCall={!!incomingCallAcceptedData?.isWebRTCCall}
+          callId={incomingCallAcceptedData?.callId}
         />
       )}
 
@@ -1006,19 +1022,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       <NotificationsPage darkMode={isDarkMode} user={user} />
                     </div>
                   </div>
-                )}
-                {currentPage === "calling" && activeCallContact && (
-                  <CallingPage
-                    contact={activeCallContact}
-                    callStatus={callStatus}
-                    onEndCall={endCall}
-                    channel={incomingCallAcceptedData?.channel || `PJSIP/${activeCallContact.extension}`}
-                    darkMode={isDarkMode}
-                    isOutgoing={!incomingCallAcceptedData}
-                    callAccepted={!!incomingCallAcceptedData}
-                    isWebRTCCall={!!incomingCallAcceptedData?.isWebRTCCall}
-                    callId={incomingCallAcceptedData?.callId}
-                  />
                 )}
               </motion.div>
             </ResponsiveContainer>

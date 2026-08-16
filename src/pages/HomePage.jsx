@@ -7,7 +7,6 @@ import {
   FiUsers as Users
 } from 'react-icons/fi';
 import { call } from '../services/call';
-import CallingPage from './CallingPage';
 import { useTheme } from '../contexts/ThemeContext';
 import { cn } from '../utils/ui';
 import toast from 'react-hot-toast';
@@ -19,8 +18,6 @@ import {
 const HomePage = ({ darkMode = false, onCall }) => {
   const [extension, setExtension] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showCallingPage, setShowCallingPage] = useState(false);
-  const [callData, setCallData] = useState(null);
   const [recentCalls, setRecentCalls] = useState([]);
   const [error, setError] = useState(null);
 
@@ -30,28 +27,24 @@ const HomePage = ({ darkMode = false, onCall }) => {
   const initiateCall = useCallback(async (ext) => {
     setLoading(true);
     try {
-      const callResult = await call(ext);
-      console.log('[HomePage] Call initiated with result:', callResult);
-      setCallData({
-        channel: callResult.apiChannel || callResult.appChannel || callResult.call_id,
-        method: callResult.method || 'webrtc',
-        callId: callResult.call_id,
-        extension: ext
-      });
-      toast.success(`Dialing ${ext}...`);
-      setShowCallingPage(true);
+      // Delegate the actual call to the parent (DashboardPage) so the call is
+      // initiated exactly once. Only fall back to a direct call when there is
+      // no parent handler.
+      if (onCall) {
+        await onCall(ext);
+      } else {
+        await call(ext);
+        toast.success(`Dialing ${ext}...`);
+      }
       const newCall = {
         extension: ext,
         timestamp: new Date(),
         type: 'outgoing'
       };
       setRecentCalls(prev => [newCall, ...prev.slice(0, 4)]);
-      if (onCall) {
-        onCall(ext);
-      }
     } catch (err) {
       console.error('[HomePage] Call initiation failed:', err);
-      toast.error('Failed to initiate call. Please try again.');
+      toast.error(err?.message || 'Failed to initiate call. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -71,29 +64,6 @@ const HomePage = ({ darkMode = false, onCall }) => {
       handleCall();
     }
   };
-
-  const handleEndCall = () => {
-    setExtension('');
-    setShowCallingPage(false);
-    setCallData(null);
-  };
-
-  if (showCallingPage) {
-    return (
-      <CallingPage
-        contact={{ name: `Extension ${extension}`, extension }}
-        callStatus="Initiating Call..."
-        isOutgoing={true}
-        channel={callData?.channel}
-        transport={callData?.method === 'webrtc' ? 'transport-ws' : 'transport-sip'}
-        onEndCall={handleEndCall}
-        darkMode={darkMode}
-        callAccepted={false}
-        isWebRTCCall={callData?.method === 'webrtc'}
-        callId={callData?.callId}
-      />
-    );
-  }
 
   return (
     <div className="h-full flex flex-col">

@@ -12,7 +12,12 @@ import {
   ArrowRight,
   AlertTriangle,
   Sun,
-  Moon
+  Moon,
+  Download,
+  RefreshCw,
+  ShieldCheck,
+  Copy,
+  Radar
 } from 'lucide-react';
 import ipConfigService from '../services/ipConfigService';
 
@@ -27,7 +32,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
 
   const defaultHost = (typeof window !== 'undefined' && window.location && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
     ? window.location.hostname
-    : '192.168.1.15';
+    : 'localhost';
 
   const defaultBackendPort = (typeof window !== 'undefined' && window.location && window.location.port)
     ? window.location.port
@@ -43,6 +48,74 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
     asteriskAMIPort: '5038'
   });
 
+  const [serverInfo, setServerInfo] = useState(null);
+  const [detectingServer, setDetectingServer] = useState(false);
+  const [regeneratingCerts, setRegeneratingCerts] = useState(false);
+
+  // Candidate backends to probe for /api/server-info.
+  const getCandidateBackends = () => {
+    const candidates = [];
+
+    // The page's own origin first: when the app is served by the backend,
+    // /api/server-info lives at the exact same origin. Skipped on the CRA dev
+    // server (port 3000), which is never the backend.
+    if (typeof window !== 'undefined' && window.location && window.location.port !== '3000') {
+      const port = window.location.port && !['80', '443'].includes(window.location.port) ? `:${window.location.port}` : '';
+      candidates.push(`${window.location.protocol}//${window.location.hostname}${port}`);
+    }
+
+    if (process.env.REACT_APP_API_URL) candidates.push(process.env.REACT_APP_API_URL.replace(/\/+$/, ''));
+
+    // Same host on the plain backend port (covers dev and non-8443 setups).
+    if (typeof window !== 'undefined' && window.location) {
+      candidates.push(`${window.location.protocol}//${window.location.hostname}:8080`);
+    }
+
+    candidates.push('http://localhost:8080');
+    candidates.push('http://127.0.0.1:8080');
+    return [...new Set(candidates)];
+  };
+
+  // Ask the backend for its own network + TLS details and prefill the form.
+  const autoDetect = async () => {
+    setDetectingServer(true);
+    let found = false;
+
+    for (const base of getCandidateBackends()) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        const response = await fetch(`${base}/api/server-info`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) continue;
+
+        const data = await response.json();
+        if (!data.success) continue;
+
+        setServerInfo(data);
+        const primary = data.server && data.server.primary_ip;
+        const asteriskHost = data.asterisk && data.asterisk.host;
+        setConfig(prev => ({
+          ...prev,
+          backendHost: primary || prev.backendHost,
+          asteriskHost: asteriskHost || prev.asteriskHost,
+          ...(data.asterisk && data.asterisk.sip_port ? { asteriskPort: String(data.asterisk.sip_port) } : {}),
+          ...(data.asterisk && data.asterisk.ami_port ? { asteriskAMIPort: String(data.asterisk.ami_port) } : {}),
+        }));
+        found = true;
+        toast.success('Detected server automatically');
+        break;
+      } catch (error) {
+        // Try the next candidate.
+      }
+    }
+
+    if (!found) {
+      toast.error('Could not auto-detect the server. Enter the details manually.');
+    }
+    setDetectingServer(false);
+  };
+
   useEffect(() => {
     // Check if configuration already exists
     const existingConfig = localStorage.getItem('voipIPConfig');
@@ -50,8 +123,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
       try {
         const parsed = JSON.parse(existingConfig);
 
-        // Migration: keep Asterisk on the known LAN host by default.
-        // Older configs sometimes pointed to 172.* (old environment).
+        // Migration: keep Asterisk on a usable host by default.
         const migrated = {
           ...parsed,
           asteriskHost: parsed.asteriskHost && parsed.asteriskHost !== '172.20.10.5' ? parsed.asteriskHost : '192.168.1.15',
@@ -67,6 +139,10 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
         console.error('Failed to parse existing config:', error);
       }
     }
+
+    // Auto-detect the server IP so the form is prefilled.
+    autoDetect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleInputChange = (field, value) => {
@@ -186,6 +262,61 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
     }
   };
 
+  const getBackendBaseUrl = () => {
+    const url = ipConfigService.resolveBackendUrl(config.backendHost, config.backendPort);
+    return url || getCandidateBackends()[0] || 'http://localhost:8080';
+  };
+
+  // Regenerate the server certificate for the current network (reuses the CA).
+  const regenerateCerts = async () => {
+    const backendUrl = getBackendBaseUrl();
+    setRegeneratingCerts(true);
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const response = await fetch(`${backendUrl}/api/server-info/regenerate-certs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const data = await response.json();
+      if (data.success) {
+        toast.success('Certificates regenerated for this network');
+        const infoRes = await fetch(`${backendUrl}/api/server-info`);
+        if (infoRes.ok) setServerInfo(await infoRes.json());
+      } else {
+        toast.error(data.error || 'Failed to regenerate certificates');
+      }
+    } catch (error) {
+      toast.error(`Certificate regeneration failed: ${error.message}`);
+    } finally {
+      setRegeneratingCerts(false);
+    }
+  };
+
+  const downloadCA = () => {
+    // When the app is served by the backend (HTTPS/LAN) the CA is on the very
+    // origin the user already reached, which is guaranteed reachable on any
+    // device. Only fall back to the configured backend for the CRA dev server.
+    const { protocol, port } = window.location;
+    if (protocol === 'https:' || port === '8080' || port === '8443') {
+      window.open(`${window.location.origin}/api/server-info/ca.crt`, '_blank');
+      return;
+    }
+    window.open(`${getBackendBaseUrl()}/api/server-info/ca.crt`, '_blank');
+  };
+
+  const copyText = (text) => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(
+        () => toast.success('Copied to clipboard'),
+        () => toast.error('Failed to copy')
+      );
+    }
+  };
+
   const saveConfiguration = async () => {
     setIsLoading(true);
     
@@ -199,6 +330,16 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
       // Save to localStorage
       localStorage.setItem('voipIPConfig', JSON.stringify(config));
       localStorage.setItem('voipConfigured', 'true');
+
+      // Mark setup as complete on the server so other devices skip this page.
+      try {
+        await fetch(`${getBackendBaseUrl()}/api/setup/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (error) {
+        console.warn('[IPConfigurationPage] Failed to mark setup complete:', error.message);
+      }
 
       // Show appropriate success message based on connection status
       if (connectionStatus.backend.status === 'success' && connectionStatus.asterisk.status === 'success') {
@@ -256,9 +397,9 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
     <div className={`min-h-screen p-2 xs:p-3 sm:p-4 ${
       darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-blue-50 to-indigo-100'
     }`}>
-      <div className="flex flex-col gap-3 xs:gap-4 sm:gap-6 max-w-7xl mx-auto">
+      <div className="flex flex-col lg:flex-row lg:items-start gap-3 xs:gap-4 sm:gap-6 lg:gap-8 max-w-7xl mx-auto">
         {/* Main Configuration Card - Mobile Responsive */}
-        <div className={`flex-1 ${
+        <div className={`flex-1 lg:min-w-0 ${
           darkMode ? 'bg-gray-800' : 'bg-white'
         } rounded-lg xs:rounded-xl sm:rounded-2xl shadow-lg xs:shadow-xl sm:shadow-2xl p-4 xs:p-6 sm:p-8`}>
         
@@ -292,15 +433,35 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
           <div className={`p-3 xs:p-4 sm:p-6 rounded-lg xs:rounded-xl border ${
             darkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'
           }`}>
-            <div className="flex items-center mb-3 xs:mb-4">
-              <Server className={`w-4 h-4 xs:w-5 xs:h-5 mr-2 ${
-                darkMode ? 'text-blue-400' : 'text-blue-600'
-              }`} />
-              <h3 className={`text-base xs:text-lg font-semibold ${
-                darkMode ? 'text-white' : 'text-gray-900'
-              }`}>
-                Backend Server
-              </h3>
+            <div className="flex items-center justify-between mb-3 xs:mb-4">
+              <div className="flex items-center">
+                <Server className={`w-4 h-4 xs:w-5 xs:h-5 mr-2 ${
+                  darkMode ? 'text-blue-400' : 'text-blue-600'
+                }`} />
+                <h3 className={`text-base xs:text-lg font-semibold ${
+                  darkMode ? 'text-white' : 'text-gray-900'
+                }`}>
+                  Backend Server
+                </h3>
+              </div>
+              <button
+                onClick={autoDetect}
+                disabled={detectingServer}
+                className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-medium transition-colors touch-target ${
+                  detectingServer
+                    ? 'bg-gray-400 cursor-not-allowed text-white'
+                    : darkMode
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                      : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                }`}
+              >
+                {detectingServer ? (
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                ) : (
+                  <Radar className="w-4 h-4 mr-1" />
+                )}
+                Auto-detect
+              </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 xs:gap-4">
@@ -437,6 +598,159 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
             </div>
           </div>
 
+          {/* HTTPS & Certificates - Mobile Responsive */}
+          <div className={`p-3 xs:p-4 sm:p-6 rounded-lg xs:rounded-xl border ${
+            darkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'
+          }`}>
+            <div className="flex items-center justify-between mb-3 xs:mb-4">
+              <div className="flex items-center">
+                <ShieldCheck className={`w-4 h-4 xs:w-5 xs:h-5 mr-2 ${
+                  darkMode ? 'text-green-400' : 'text-green-600'
+                }`} />
+                <h3 className={`text-base xs:text-lg font-semibold ${
+                  darkMode ? 'text-white' : 'text-gray-900'
+                }`}>
+                  HTTPS &amp; Certificates
+                </h3>
+              </div>
+              {serverInfo && serverInfo.tls && (
+                <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                  serverInfo.tls.enabled
+                    ? darkMode ? 'bg-green-900/50 text-green-300' : 'bg-green-100 text-green-700'
+                    : darkMode ? 'bg-yellow-900/50 text-yellow-300' : 'bg-yellow-100 text-yellow-700'
+                }`}>
+                  {serverInfo.tls.enabled ? 'HTTPS Active' : 'No Certificates'}
+                </span>
+              )}
+            </div>
+
+            {/* Detected server IPs */}
+            {serverInfo && serverInfo.server && (
+              <div className="mb-4">
+                <p className={`block text-xs xs:text-sm font-medium mb-1 xs:mb-2 ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                  Detected Server IP(s)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {[serverInfo.server.primary_ip, ...(serverInfo.server.all_ips || [])]
+                    .filter((ip, i, arr) => ip && arr.indexOf(ip) === i)
+                    .map((ip) => (
+                      <button
+                        key={ip}
+                        onClick={() => copyText(ip)}
+                        className={`inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-mono border ${
+                          darkMode
+                            ? 'bg-gray-900 border-gray-600 text-green-400'
+                            : 'bg-white border-gray-300 text-gray-800'
+                        }`}
+                      >
+                        {ip}
+                        <Copy className="w-3.5 h-3.5 ml-2 opacity-60" />
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* HTTPS address */}
+            {serverInfo && serverInfo.tls && serverInfo.tls.url && (
+              <div className="mb-4">
+                <p className={`block text-xs xs:text-sm font-medium mb-1 xs:mb-2 ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                  Open the app from clients at
+                </p>
+                <button
+                  onClick={() => copyText(serverInfo.tls.url)}
+                  className={`w-full text-left break-all px-3 xs:px-4 py-2 xs:py-3 rounded-lg font-mono text-sm border ${
+                    darkMode
+                      ? 'bg-gray-900 border-gray-600 text-green-400'
+                      : 'bg-white border-gray-300 text-green-700'
+                  }`}
+                >
+                  {serverInfo.tls.url}
+                  <Copy className="inline w-3.5 h-3.5 ml-2 opacity-60" />
+                </button>
+                <p className={`mt-1 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Mic/camera access requires HTTPS. Install the CA once on each client so the
+                  browser trusts this address.
+                </p>
+              </div>
+            )}
+
+            {/* Cert status + actions */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 xs:gap-4">
+              <div>
+                <p className={`block text-xs xs:text-sm font-medium mb-1 xs:mb-2 ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                  Certificate Status
+                </p>
+                {serverInfo && serverInfo.tls ? (
+                  <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                    {serverInfo.tls.enabled
+                      ? `Valid until ${new Date(serverInfo.tls.cert_expires).toLocaleDateString()}`
+                      : 'Not generated yet. Click regenerate below.'}
+                  </p>
+                ) : (
+                  <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                    Run auto-detect to check certificate status.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 xs:gap-4 mt-4">
+              <button
+                onClick={regenerateCerts}
+                disabled={regeneratingCerts}
+                className={`flex-1 flex items-center justify-center px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors touch-target ${
+                  regeneratingCerts
+                    ? 'bg-gray-400 cursor-not-allowed text-white'
+                    : darkMode
+                      ? 'bg-green-700 hover:bg-green-600 text-white'
+                      : 'bg-green-600 hover:bg-green-700 text-white'
+                }`}
+              >
+                {regeneratingCerts ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                )}
+                Regenerate Certificates
+              </button>
+
+              <button
+                onClick={downloadCA}
+                disabled={!serverInfo || !serverInfo.tls || !serverInfo.tls.enabled}
+                className={`flex-1 flex items-center justify-center px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors touch-target ${
+                  !serverInfo || !serverInfo.tls || !serverInfo.tls.enabled
+                    ? 'bg-gray-400 cursor-not-allowed text-white'
+                    : darkMode
+                      ? 'bg-blue-700 hover:bg-blue-600 text-white'
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download CA
+              </button>
+            </div>
+
+            <div className={`mt-4 p-3 rounded-lg border-l-4 ${
+              darkMode
+                ? 'border-blue-400 bg-blue-900/20 text-blue-200'
+                : 'border-blue-500 bg-blue-50 text-blue-800'
+            }`}>
+              <p className="text-xs">
+                <strong>Moving to a different network/server?</strong> Click "Regenerate Certificates" after
+                connecting to the new network (or run <code className="font-mono">backend\scripts\refresh-network.ps1</code>),
+                then restart the backend so it loads the new certificate. Clients keep trusting the site because the
+                CA does not change.
+              </p>
+            </div>
+          </div>
+
           {/* Action Buttons - Sticky on mobile so they never disappear */}
           <div
             className={
@@ -445,7 +759,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
             }
             style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}
           >
-            <div className="flex flex-col xs:flex-row gap-3 xs:gap-4">
+            <div className="flex flex-col sm:flex-row gap-3 xs:gap-4">
               <button
                 onClick={testConnections}
                 disabled={testingConnection}
@@ -514,7 +828,7 @@ const IPConfigurationPage = ({ darkMode, toggleDarkMode }) => {
         {/* Side Panel for Configuration Help - Mobile Responsive */}
         {(connectionStatus.asterisk.status === 'error' || connectionStatus.asterisk.status === 'warning' ||
           connectionStatus.backend.status === 'error') && (
-          <div className="w-full mt-4 space-y-3 xs:space-y-4">
+          <div className="w-full lg:w-96 xl:w-[28rem] lg:flex-shrink-0 mt-4 lg:mt-0 space-y-3 xs:space-y-4">
 
             {/* Connection Details Panel - Mobile Responsive */}
             {(connectionStatus.asterisk.details || connectionStatus.backend.status === 'error') && (

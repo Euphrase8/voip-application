@@ -22,6 +22,29 @@ export const getToken = () => {
   return token;
 };
 
+// Decode the JWT payload (base64url, unsigned read) to pull out the user id
+// baked into the token at login. This is authoritative even when the stored
+// user_id goes stale or missing after a DB reset.
+export const getAuthUserId = () => {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const json = decodeURIComponent(
+      atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
+        .split('')
+        .map((c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))
+        .join('')
+    );
+    const claims = JSON.parse(json);
+    return claims && claims.user_id !== undefined ? Number(claims.user_id) : null;
+  } catch (error) {
+    console.warn('[login.js] Failed to decode token payload:', error);
+    return null;
+  }
+};
+
 export const getExtension = () => {
   const extension = localStorage.getItem('extension');
   if (!extension) {

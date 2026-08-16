@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-const API_HOST = process.env.REACT_APP_API_URL || `http://${window.location.hostname}:8080`;
+// Prefer the same origin the app is served from (production: the backend serves
+// the frontend, so the API is at the same origin over the same scheme). Only on
+// the CRA dev server (port 3000) do we fall back to the backend on :8080.
+const API_HOST = process.env.REACT_APP_API_URL || (
+  window.location.port === '3000'
+    ? `http://${window.location.hostname}:8080`
+    : window.location.origin
+);
 
 const StatusPill = ({ healthy, label, sub }) => (
   <div className="flex items-center justify-between py-1.5">

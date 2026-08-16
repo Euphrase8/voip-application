@@ -7,7 +7,8 @@
     <!-- Enhanced Mobile Viewport Configuration -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 
-    <!-- iOS Specific Meta Tags for Web App Behavior -->
+    <!-- Web App Behavior Meta Tags -->
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="VoIP System" />
@@ -21,10 +22,6 @@
       name="description"
       content="Professional VoIP Communication System - Make calls, manage contacts, and stay connected from any device"
     />
-
-    <!-- Apple Touch Icons for Different Devices -->
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="%PUBLIC_URL%/logo192.png" />
 
     <!-- Prevent iOS Safari from auto-zooming on input focus -->
     <meta name="format-detection" content="telephone=no" />
@@ -43,31 +40,6 @@
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
     <title>VoIP System - Professional Communication</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    animation: {
-                        fadeInUp: 'fadeInUp 0.6s ease-out forwards',
-                    },
-                    keyframes: {
-                        fadeInUp: {
-                            '0%': {
-                                opacity: '0',
-                                transform: 'translateY(20px)'
-                            },
-                            '100%': {
-                                opacity: '1',
-                                transform: 'translateY(0)'
-                            },
-                        },
-                    },
-                },
-            },
-        };
-    </script>
-
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>

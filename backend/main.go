@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,16 +17,59 @@ import (
 	"syscall"
 	"time"
 	"voip-backend/asterisk"
+	"voip-backend/certs"
 	"voip-backend/config"
 	"voip-backend/database"
 	"voip-backend/handlers"
 	"voip-backend/middleware"
+	"voip-backend/models"
 	"voip-backend/services"
 	"voip-backend/websocket"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
+// corsOriginAllowed reports whether a browser Origin header may call the API.
+func corsOriginAllowed(origin string, r *http.Request) bool {
+	// Exact static allow-list (dev servers, configured origins).
+	for _, allowed := range config.AppConfig.CORSOrigins {
+		if allowed == "*" || allowed == origin {
+			return true
+		}
+	}
+
+	originURL, err := url.Parse(origin)
+	if err != nil || originURL.Hostname() == "" {
+		return false
+	}
+	originHost := strings.ToLower(originURL.Hostname())
+
+	// Same host the request came in on (the frontend is served by this backend).
+	reqHost := strings.ToLower(r.Host)
+	if h, _, err := net.SplitHostPort(reqHost); err == nil {
+		reqHost = h
+	}
+	if originHost == reqHost {
+		return true
+	}
+
+	// The backend's own local addresses and hostname (any port/scheme).
+	for _, ip := range certs.DetectLocalIPs() {
+		if originHost == strings.ToLower(ip) {
+			return true
+		}
+	}
+	if hn, err := os.Hostname(); err == nil && originHost == strings.ToLower(hn) {
+		return true
+	}
+
+	// Loopback is always the machine itself.
+	if originHost == "localhost" || originHost == "127.0.0.1" || originHost == "::1" {
+		return true
+	}
+	return false
+}
 
 const lockFileName = "voip-backend.lock"
 
@@ -106,6 +150,15 @@ func main() {
 	// Initialize database
 	database.InitDatabase()
 
+	// Clear any stale active call records from previous runs. WebRTC calls
+	// cannot survive a backend restart (both peers reconnect their WebSockets),
+	// so leftover records would only cause spurious "User is busy" errors.
+	if err := database.GetDB().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.ActiveCall{}).Error; err != nil {
+		log.Printf("Warning: failed to clear stale active call records: %v", err)
+	} else {
+		log.Printf("Cleared stale active call records from previous run")
+	}
+
 	// Initialize WebSocket hub
 	websocket.InitHub()
 
@@ -173,13 +226,24 @@ func main() {
 		log.Printf("Warning: Failed to set trusted proxies: %v", err)
 	}
 
-	// Configure CORS
-	corsConfig := cors.DefaultConfig()
-	corsConfig.AllowOrigins = config.AppConfig.CORSOrigins
-	corsConfig.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
-	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	corsConfig.AllowCredentials = true
-	r.Use(cors.New(corsConfig))
+	// Configure CORS dynamically. The backend serves the frontend on the LAN,
+	// so any origin on the backend's own host/IPs (any port/scheme) must be
+	// allowed, not just the static list.
+	r.Use(func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin != "" && corsOriginAllowed(origin, c.Request) {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+			c.Header("Access-Control-Allow-Headers", "Origin, Content-Length, Content-Type, Authorization")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			c.Header("Access-Control-Max-Age", "600")
+			if c.Request.Method == http.MethodOptions {
+				c.AbortWithStatus(http.StatusNoContent)
+				return
+			}
+		}
+		c.Next()
+	})
 
 	// Health check endpoint
 	r.GET("/health", func(c *gin.Context) {
@@ -237,6 +301,11 @@ func main() {
 	// WebSocket endpoint
 	r.GET("/ws", websocket.HandleWebSocket)
 
+	// Asterisk WebSocket reverse proxy: browsers dial wss://<backend>/asterisk-ws
+	// and the backend tunnels to Asterisk's WebSocket transport (WSL NAT IP is
+	// not reachable from LAN devices directly).
+	r.GET("/asterisk-ws", websocket.HandleAsteriskProxy)
+
 	// Public routes (no authentication required)
 	public := r.Group("/api")
 	public.Use(middleware.AuthRateLimitMiddleware())
@@ -245,6 +314,15 @@ func main() {
 		public.POST("/register", handlers.Register)
 		public.POST("/refresh", handlers.RefreshToken)
 		public.POST("/test-asterisk", handlers.TestAsteriskConnectionsPublic)
+
+		// Server info + certificate helpers (no auth, used by the setup page)
+		public.GET("/server-info", handlers.GetServerInfo)
+		public.POST("/server-info/regenerate-certs", handlers.RegenerateCerts)
+		public.GET("/server-info/ca.crt", handlers.DownloadCA)
+
+		// Setup state (no auth, used by the setup page on any device)
+		public.GET("/setup/status", handlers.GetSetupStatus)
+		public.POST("/setup/complete", handlers.CompleteSetup)
 	}
 
 	// Protected routes (authentication required)
@@ -426,6 +504,10 @@ func main() {
 						return
 					}
 				}
+				// Never let browsers cache index.html: it references hashed JS/CSS
+				// bundles, so a stale copy keeps old (possibly buggy) assets alive.
+				c.Header("Cache-Control", "no-store, must-revalidate")
+				c.Header("Pragma", "no-cache")
 				c.File(filepath.Join(absFrontend, "index.html"))
 			})
 			log.Printf("Serving frontend from %s", absFrontend)
@@ -509,6 +591,16 @@ func main() {
 	} else {
 		log.Printf("TLS cert %s not found, HTTPS disabled", certFile)
 	}
+
+	// Periodically remove abandoned active calls so stale records can't cause
+	// spurious "User is busy" errors.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			services.CleanupStaleActiveCalls()
+		}
+	}()
 
 	// Wait for interrupt signal for graceful shutdown
 	quit := make(chan os.Signal, 1)

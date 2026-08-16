@@ -811,6 +811,15 @@ func SetUserOfflineByExtension(extension string) error {
 
 	log.Printf("Set user %s (extension: %s) offline due to WebSocket disconnection", user.Username, extension)
 
+	// Clean up any active calls for this user. A WebRTC call requires a live
+	// WebSocket connection on both ends, so once the socket is gone the call
+	// is dead and its record must not block future calls with "User is busy".
+	if err := database.GetDB().Where("caller_id = ? OR callee_id = ?", user.ID, user.ID).Delete(&models.ActiveCall{}).Error; err != nil {
+		log.Printf("Failed to clean up active calls for user %s: %v", user.Username, err)
+	} else {
+		log.Printf("Cleaned up active calls for disconnected user %s (extension: %s)", user.Username, extension)
+	}
+
 	// Broadcast status change to other users
 	hub := websocket.GetHub()
 	if hub != nil {

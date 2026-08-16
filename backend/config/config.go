@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,10 @@ type Config struct {
 	Environment   string
 	ServiceName   string
 	DiscoveryMode string
+
+	// Guards periodic re-resolution of dynamic hosts
+	resolveMu         sync.Mutex
+	lastHostResolveAt time.Time
 }
 
 var (
@@ -146,7 +151,9 @@ func (c *Config) resolveHosts() {
 
 	// AMI may dial a different (local) address than the host exposed to clients.
 	// Default to the resolved Asterisk host when ASTERISK_AMI_HOST is unset.
-	if c.AsteriskAMIHost == "" {
+	if amiEnv := getEnv("ASTERISK_AMI_HOST", ""); amiEnv != "" {
+		c.AsteriskAMIHost = amiEnv
+	} else {
 		c.AsteriskAMIHost = c.AsteriskHost
 	}
 	log.Printf("[Config] Resolved AMI host: %s", c.AsteriskAMIHost)
@@ -158,6 +165,29 @@ func (c *Config) resolveHosts() {
 
 	log.Printf("[Config] Resolved Asterisk host: %s", c.AsteriskHost)
 	log.Printf("[Config] Resolved public host: %s", c.PublicHost)
+}
+
+// hostResolveTTL controls how often dynamic host resolution is refreshed.
+const hostResolveTTL = 30 * time.Second
+
+// ensureResolvedHosts re-runs dynamic host resolution periodically so clients
+// always receive the current real hosts (e.g. a WSL NAT IP that changed after a
+// reboot) without needing a backend restart. A full re-resolve is only performed
+// when the cached host becomes unreachable; otherwise the current result is
+// reused to avoid spawning subprocesses on every request.
+func (c *Config) ensureResolvedHosts() {
+	c.resolveMu.Lock()
+	defer c.resolveMu.Unlock()
+
+	if time.Since(c.lastHostResolveAt) < hostResolveTTL {
+		return
+	}
+	c.lastHostResolveAt = time.Now()
+
+	if !isLoopbackHost(c.AsteriskHost) && c.isHostReachable(c.AsteriskHost, c.AsteriskAMIPort) {
+		return
+	}
+	c.resolveHosts()
 }
 
 // configureCORS sets up CORS origins dynamically
@@ -183,12 +213,46 @@ func (c *Config) configureCORS() {
 	log.Printf("[Config] CORS origins: %v", c.CORSOrigins)
 }
 
+// isLoopbackHost reports whether host refers to the local machine.
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
 // resolveAsteriskHost tries to find the best Asterisk host
 func (c *Config) resolveAsteriskHost() string {
-	// First, check if ASTERISK_HOST is explicitly set in environment
-	if envHost := getEnv("ASTERISK_HOST", ""); envHost != "" {
-		log.Printf("[Config] Using ASTERISK_HOST from environment: %s", envHost)
-		return envHost
+	envHost := getEnv("ASTERISK_HOST", "")
+
+	// When the configured host is loopback, treat it as a candidate rather than
+	// a hard preference: the WSL localhost relay is unreliable (connections die
+	// mid-session), so a reachable WSL IP is preferred for local Asterisk.
+	isLoopback := isLoopbackHost(envHost)
+
+	if envHost != "" && !isLoopback {
+		if c.isHostReachable(envHost, c.AsteriskAMIPort) {
+			log.Printf("[Config] Using ASTERISK_HOST from environment: %s", envHost)
+			return envHost
+		}
+		log.Printf("[Config] ASTERISK_HOST %s not reachable, probing alternatives...", envHost)
+	}
+
+	// When Asterisk runs in WSL, its own virtual IP is reachable directly from
+	// Windows without the (sometimes flaky) localhost relay.
+	if wslIP := c.detectWSLIP(); wslIP != "" {
+		if c.isHostReachable(wslIP, c.AsteriskAMIPort) {
+			log.Printf("[Config] ✓ Asterisk host reachable via WSL IP: %s", wslIP)
+			return wslIP
+		}
+	}
+
+	if envHost != "" {
+		if c.isHostReachable(envHost, c.AsteriskAMIPort) {
+			log.Printf("[Config] Using ASTERISK_HOST from environment: %s", envHost)
+			return envHost
+		}
 	}
 
 	// List of possible Asterisk hosts to try if not explicitly set
@@ -213,6 +277,23 @@ func (c *Config) resolveAsteriskHost() string {
 	log.Printf("[Config] ⚠ No Asterisk host reachable, defaulting to localhost")
 	log.Printf("[Config] Please ensure Asterisk is installed and running, or configure ASTERISK_HOST")
 	return "localhost"
+}
+
+// detectWSLIP returns the IPv4 address of the configured WSL distro, if any.
+func (c *Config) detectWSLIP() string {
+	if c.AsteriskWSLDistro == "" {
+		return ""
+	}
+	out, err := exec.Command("wsl", "-d", c.AsteriskWSLDistro, "hostname", "-I").Output()
+	if err != nil {
+		return ""
+	}
+	for _, token := range strings.Fields(string(out)) {
+		if strings.Contains(token, ".") {
+			return token
+		}
+	}
+	return ""
 }
 
 // getPublicHost determines the best public host for frontend connections
@@ -280,12 +361,27 @@ func (c *Config) GetFrontendConfigForRequest(r *http.Request) map[string]interfa
 	if scheme == "https" {
 		wsScheme = "wss"
 	}
+
+	// Clients should dial the real, dynamically-resolved Asterisk host (e.g. a
+	// WSL NAT IP), refreshed periodically. Only when Asterisk genuinely runs
+	// alongside the backend (loopback) do we reuse the host the client already
+	// used to reach the backend, which keeps LAN setups working.
+	c.ensureResolvedHosts()
+	asteriskHost := c.AsteriskHost
+	if hostname, _, err := net.SplitHostPort(host); err == nil && hostname != "" {
+		if isLoopbackHost(asteriskHost) {
+			asteriskHost = hostname
+		}
+	} else if host != "" {
+		asteriskHost = host
+	}
+
 	return map[string]interface{}{
 		"api_url": scheme + "://" + host,
 		"ws_url":  wsScheme + "://" + host + "/ws",
 		"asterisk": map[string]string{
-			"host":   c.AsteriskHost,
-			"ws_url": c.GetAsteriskWebSocketURL(),
+			"host":   asteriskHost,
+			"ws_url": "ws://" + asteriskHost + ":" + c.SIPPort + "/ws",
 		},
 		"environment": c.Environment,
 		"debug":       c.Debug,

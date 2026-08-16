@@ -132,6 +132,59 @@ func (s *StatusCleanupService) cleanupStaleUsers() {
 	}
 }
 
+// CleanupStaleActiveCalls deletes abandoned call records so they cannot block
+// users with "User is busy". It removes unanswered calls past their ringing
+// window and WebRTC calls whose participants no longer have a live WebSocket.
+func CleanupStaleActiveCalls() {
+	db := database.GetDB()
+	if db == nil {
+		return
+	}
+
+	// Delete unanswered (ringing/initiated) calls older than 90 seconds.
+	ringingCutoff := time.Now().Add(-90 * time.Second)
+	res := db.Where("status IN ('ringing', 'initiated') AND start_time < ?", ringingCutoff).Delete(&models.ActiveCall{})
+	if res.Error == nil && res.RowsAffected > 0 {
+		log.Printf("[CLEANUP] Removed %d stale unanswered active call(s)", res.RowsAffected)
+	}
+
+	// Delete WebRTC calls whose participants are no longer connected. A WebRTC
+	// call requires both parties to have a live WebSocket, so a missing peer
+	// means the call is dead.
+	hub := websocket.GetHub()
+	if hub == nil {
+		return
+	}
+
+	var calls []models.ActiveCall
+	if err := db.Where("channel LIKE ?", "webrtc-call-%").Find(&calls).Error; err != nil {
+		log.Printf("[CLEANUP] Error fetching WebRTC active calls: %v", err)
+		return
+	}
+
+	removed := int64(0)
+	for _, call := range calls {
+		var caller, callee models.User
+		callerFound := db.First(&caller, call.CallerID).Error == nil
+		calleeFound := db.First(&callee, call.CalleeID).Error == nil
+
+		callerLive := callerFound && hub.IsExtensionConnected(caller.Extension)
+		calleeLive := calleeFound && hub.IsExtensionConnected(callee.Extension)
+
+		if !callerLive || !calleeLive {
+			if err := db.Delete(&call).Error; err == nil {
+				removed++
+				log.Printf("[CLEANUP] Removed WebRTC call %s (%s -> %s), peer disconnected",
+					call.Channel, caller.Extension, callee.Extension)
+			}
+		}
+	}
+
+	if removed > 0 {
+		log.Printf("[CLEANUP] Removed %d stale WebRTC call(s)", removed)
+	}
+}
+
 // CleanupDisconnectedUsers immediately cleans up users without WebSocket connections
 func (s *StatusCleanupService) CleanupDisconnectedUsers() {
 	log.Println("Running immediate cleanup of disconnected users...")

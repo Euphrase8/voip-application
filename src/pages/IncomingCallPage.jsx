@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { Avatar, Tooltip, Button } from "@mui/material";
-import { Call, CallEnd } from "@mui/icons-material";
+import { motion } from "framer-motion";
+import { FiPhone, FiPhoneOff, FiPhoneIncoming } from "react-icons/fi";
 import { sendWebSocketMessage } from "../services/websocketservice";
 import { hangup } from "../services/hang";
 import webrtcCallService from "../services/webrtcCallService";
+import { cn, getInitials, getAvatarColor } from "../utils/ui";
 
 const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAccepted, onCallRejected, onSwitchToCallPage }) => {
   const [notification, setNotification] = useState(null);
@@ -256,22 +257,26 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
     }
   };
 
+  const accepting = isLoading && callAccepted;
+  const rejecting = isLoading && !callAccepted;
+
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 px-3 py-4 sm:px-4 sm:py-6 md:px-6 md:py-8 animate-[fadeInUp_0.6s_ease-out_forwards]"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="dialog"
+      aria-modal="true"
       aria-label="Incoming call dialog"
     >
       {notification && (
         <div
-          className={`fixed top-20 right-4 sm:right-6 z-50 glass-effect p-3 sm:p-4 rounded-lg shadow-lg animate-[fadeInUp_0.6s_ease-out_forwards] ${
+          className={`fixed top-6 right-4 sm:right-6 z-[61] p-3 sm:p-4 rounded-lg shadow-lg animate-[fadeInUp_0.6s_ease-out_forwards] ${
             notification.type === "success"
-              ? "bg-green-500/80"
+              ? "bg-green-500/90"
               : notification.type === "error"
-              ? "bg-red-500/80"
-              : "bg-blue-500/80"
+              ? "bg-red-500/90"
+              : "bg-blue-500/90"
           }`}
           role="alert"
           aria-live="polite"
@@ -281,113 +286,117 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
           </span>
         </div>
       )}
-      <div
-        className="w-full max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg glass-effect p-4 sm:p-6 md:p-8 rounded-xl sm:rounded-2xl shadow-xl border border-white/20 transform transition-all duration-500 hover:shadow-[0_0_15px_rgba(59,130,246,0.4)] animate-[fadeInUp_0.8s_ease-out_forwards]"
-        style={{
-          background: darkMode
-            ? "rgba(30, 30, 30, 0.25)"
-            : "rgba(255, 255, 255, 0.2)",
-        }}
-      >
-        <div className="flex items-center space-x-3 sm:space-x-4 mb-4 sm:mb-6 animate-[fadeInUp_1s_ease-out_forwards]">
-          <Avatar
-            alt={caller.name}
-            src={caller.avatar}
-            className="w-10 h-10 sm:w-12 sm:h-12 md:w-16 md:h-16 rounded-full border-3 border-white/40 shadow-md"
-            sx={{
-              bgcolor: caller.avatar ? 'transparent' : '#6366f1',
-              color: 'white',
-              fontSize: { xs: '1rem', sm: '1.2rem', md: '1.4rem' },
-              fontWeight: 'bold'
-            }}
-          >
-            {!caller.avatar && (caller.name ? caller.name.charAt(0).toUpperCase() : caller.extension?.charAt(0) || '?')}
-          </Avatar>
-          <div>
-            <h2
-              className={`text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold ${
-                darkMode ? "text-white" : "text-white"
-              } animate-pulse leading-tight`}
-              aria-live="polite"
-              style={{ textShadow: "0 1px 2px rgba(0, 0, 0, 0.5)" }}
-            >
-              {callAccepted ? "📞 Connecting..." : `📞 ${caller.name} is calling`}
-            </h2>
-            <p
-              className={`text-sm sm:text-base md:text-lg font-semibold ${
-                darkMode ? "text-blue-200" : "text-blue-200"
-              } leading-tight`}
-            >
-              Extension: {caller.extension}
-            </p>
-            <p
-              className={`text-xs sm:text-sm md:text-base ${
-                darkMode ? "text-gray-400" : "text-gray-300"
-              } mt-1`}
-            >
-              Priority: {callData?.priority || "Normal"} • Method: WebRTC
-            </p>
-            {callAccepted ? (
-              <p
-                className={`text-sm ${
-                  darkMode ? "text-green-400" : "text-green-300"
-                } mt-1 font-semibold animate-pulse`}
-              >
-                {connectionStatus}
-              </p>
-            ) : (
-              <p
-                className={`text-sm ${
-                  darkMode ? "text-gray-400" : "text-gray-300"
-                } mt-1`}
-              >
-                Time Left: {timeLeft}s
-              </p>
-            )}
-          </div>
-        </div>
-        {!callAccepted && (
-          <div className="flex justify-center space-x-4 sm:space-x-6 md:space-x-8 animate-[fadeInUp_1.2s_ease-out_forwards]">
-            <Tooltip title="Accept Call">
-              <Button
-                variant="contained"
-                onClick={handleAccept}
-                disabled={isLoading}
-                className={`w-12 h-12 sm:w-16 sm:h-16 md:w-20 md:h-20 lg:w-24 lg:h-24 rounded-full bg-emerald-600 hover:bg-emerald-700 focus:ring-4 focus:ring-emerald-500/60 transition-all transform active:scale-95 sm:hover:scale-110 ${
-                  isLoading ? "opacity-50 cursor-not-allowed" : ""
-                } ${darkMode ? "shadow-emerald-900/60" : "shadow-emerald-700/60"} min-w-[44px] min-h-[44px]`}
-                startIcon={<Call className="text-lg sm:text-xl md:text-2xl" />}
-                aria-label="Accept the incoming call"
-              />
-            </Tooltip>
-            <Tooltip title="Reject Call">
-              <Button
-                variant="contained"
-                onClick={handleReject}
-                disabled={isLoading}
-                className={`w-12 h-12 sm:w-16 sm:h-16 md:w-20 md:h-20 lg:w-24 lg:h-24 rounded-full bg-red-600 hover:bg-red-700 focus:ring-4 focus:ring-red-500/60 transition-all transform active:scale-95 sm:hover:scale-110 ${
-                  isLoading ? "opacity-50 cursor-not-allowed" : ""
-                } ${darkMode ? "shadow-red-900/60" : "shadow-red-700/60"} min-w-[44px] min-h-[44px]`}
-                startIcon={<CallEnd className="text-lg sm:text-xl md:text-2xl" />}
-                aria-label="Reject the incoming call"
-              />
-            </Tooltip>
-          </div>
-        )}
 
-        {callAccepted && (
-          <div className="flex justify-center animate-[fadeInUp_1.2s_ease-out_forwards]">
-            <div className="flex items-center space-x-3">
-              <div className="w-4 h-4 bg-green-500 rounded-full animate-pulse"></div>
-              <span className={`text-lg font-semibold ${
-                darkMode ? "text-green-400" : "text-green-300"
-              }`}>
-                Establishing connection...
-              </span>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.85, y: 24 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: "spring", damping: 22, stiffness: 260 }}
+        className={cn(
+          "w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border",
+          darkMode ? "bg-secondary-800 border-secondary-700" : "bg-white border-gray-200"
+        )}
+      >
+        {/* Top bar */}
+        <div className={cn(
+          "px-6 py-3 flex items-center justify-center gap-2 border-b",
+          darkMode ? "bg-secondary-900 border-secondary-700" : "bg-gray-50 border-gray-100"
+        )}>
+          <FiPhoneIncoming className="w-4 h-4 text-green-500" />
+          <span className={cn(
+            "text-sm font-semibold tracking-wide",
+            darkMode ? "text-secondary-300" : "text-secondary-600"
+          )}>
+            Incoming Call
+          </span>
+        </div>
+
+        <div className="px-8 py-8 flex flex-col items-center">
+          {/* Avatar */}
+          <div className="relative mb-6">
+            <div className="absolute -inset-3 rounded-full border-2 border-green-400/40 animate-ping" />
+            <div className={cn(
+              "w-24 h-24 rounded-full flex items-center justify-center text-3xl font-bold text-white shadow-lg",
+              getAvatarColor(caller.name)
+            )}>
+              {getInitials(caller.name)}
+            </div>
+            <div className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-green-500 border-4 border-white dark:border-secondary-800 flex items-center justify-center">
+              <FiPhone className="w-4 h-4 text-white" />
             </div>
           </div>
-        )}
-      </div>
+
+          <h2 className={cn("text-2xl font-bold mb-1 text-center", darkMode ? "text-white" : "text-gray-900")}>
+            {caller.name}
+          </h2>
+          <p className={cn("text-sm mb-3", darkMode ? "text-secondary-400" : "text-secondary-500")}>
+            Extension: {caller.extension}
+          </p>
+
+          <span className={cn(
+            "inline-flex items-center px-3 py-1 rounded-full text-xs font-medium mb-6",
+            darkMode ? "bg-secondary-700 text-secondary-200" : "bg-gray-100 text-secondary-600"
+          )}>
+            {callData?.priority || "Normal"} priority
+          </span>
+
+          {/* Status */}
+          <div className="flex items-center gap-2 mb-8">
+            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <span className={cn("text-sm", darkMode ? "text-secondary-400" : "text-secondary-500")}>
+              {callAccepted ? connectionStatus : `Ringing... ${timeLeft}s`}
+            </span>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center justify-center gap-12">
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={handleReject}
+              disabled={isLoading}
+              className="flex flex-col items-center gap-2"
+              aria-label="Decline call"
+            >
+              <span className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center shadow-lg shadow-red-500/40 transition-colors",
+                "bg-red-500 hover:bg-red-600 text-white",
+                isLoading && "opacity-50"
+              )}>
+                {rejecting ? (
+                  <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <FiPhoneOff className="w-6 h-6" />
+                )}
+              </span>
+              <span className={cn("text-xs font-medium", darkMode ? "text-secondary-300" : "text-secondary-600")}>
+                Decline
+              </span>
+            </motion.button>
+
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={handleAccept}
+              disabled={isLoading}
+              className="flex flex-col items-center gap-2"
+              aria-label="Accept call"
+            >
+              <span className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center shadow-lg shadow-green-500/40 transition-colors",
+                "bg-green-500 hover:bg-green-600 text-white",
+                isLoading && "opacity-50"
+              )}>
+                {accepting ? (
+                  <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <FiPhone className="w-6 h-6" />
+                )}
+              </span>
+              <span className={cn("text-xs font-medium", darkMode ? "text-secondary-300" : "text-secondary-600")}>
+                Accept
+              </span>
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 };

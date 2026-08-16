@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   FiArrowDown,
   FiCornerUpLeft,
@@ -17,6 +17,7 @@ import {
 } from "../services/websocketservice";
 import { copyToClipboard } from "../utils/ui";
 import { playMessageSound, isChatSoundMuted, setChatSoundMuted } from "../utils/notificationSound";
+import { getAuthUserId } from "../services/login";
 import {
   genClientMessageId,
   deriveStatus,
@@ -29,6 +30,7 @@ import {
   markReadBy,
   clearUnread,
   upsertConversationFromMessage,
+  sanitizeConversations,
   updateConversationPreview,
   getPresence,
   formatFullDate,
@@ -148,7 +150,7 @@ function DeleteConfirmModal({ dark, deleting, onCancel, onConfirm }) {
 /* Main component                                                      */
 /* ------------------------------------------------------------------ */
 
-const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
+const ChatPage = ({ darkMode, currentUser, onVoiceCall, onVideoCall, initialContact }) => {
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -170,9 +172,20 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
   const [toast, setToast] = useState(null);
   const [soundMuted, setSoundMuted] = useState(() => isChatSoundMuted());
 
-  const me = Number(localStorage.getItem("user_id") || 0);
+  // Identity: currentUser.id is captured at login/auto-login and is stable for
+  // the session; getAuthUserId() is the JWT fallback; the stored value last.
+  // Keeping session-stable data first avoids `me` flipping mid-session when two
+  // accounts share one browser (shared localStorage token).
+  const me = Number(currentUser?.id || getAuthUserId() || localStorage.getItem("user_id") || 0);
   const myUsername = localStorage.getItem("username") || "";
   const myRole = localStorage.getItem("userRole") || "";
+
+  // Map of user id -> user profile, used to backfill conversation contacts
+  // when a message payload doesn't carry the other party's name/extension.
+  const usersById = useMemo(
+    () => new Map(allUsers.filter((u) => u && u.id !== undefined).map((u) => [u.id, u])),
+    [allUsers]
+  );
 
   const scrollContainerRef = useRef(null);
   const textareaRef = useRef(null);
@@ -213,6 +226,16 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Show the total unread count in the browser tab title, but only when > 0.
+  useEffect(() => {
+    const baseTitle = "VoIP System - Professional Communication";
+    const totalUnread = conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+    document.title = totalUnread > 0 ? `(${totalUnread}) ${baseTitle}` : baseTitle;
+    return () => {
+      document.title = baseTitle;
+    };
+  }, [conversations]);
+
   const showToast = useCallback((text) => {
     setToast(text);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -232,7 +255,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     try {
       const data = await getConversations();
       if (data.success) {
-        setConversations(sortConversations((data.conversations || []).slice()));
+        setConversations(sortConversations(sanitizeConversations(data.conversations)));
       }
     } catch (e) {
       // keep existing list on failure
@@ -371,7 +394,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
             clearUnread(setConversations, msg.sender_id);
             markAsRead(msg.sender_id).catch(() => {});
           }
-          upsertConversationFromMessage(setConversations, msg, me, !isOpen);
+          upsertConversationFromMessage(setConversations, msg, me, !isOpen, usersById);
           // Audible cue when the incoming chat isn't on screen or the tab is hidden.
           if (!isOpen || document.hidden) {
             playMessageSound();
@@ -386,7 +409,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
               mergeMessage(prev, { ...msg, key: `m-${msg.id}`, _status: deriveStatus(msg) })
             );
           }
-          upsertConversationFromMessage(setConversations, msg, me, false);
+          upsertConversationFromMessage(setConversations, msg, me, false, usersById);
           break;
         }
         case "chat_message_delivered": {
@@ -450,7 +473,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
           break;
       }
     },
-    [me]
+    [me, usersById]
   );
 
   /* ---------------- effects ---------------- */
@@ -532,6 +555,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
       is_read: false,
       delivered_at: null,
       sender: { id: me, username: myUsername, extension: localStorage.getItem("extension") },
+      receiver: user,
       reply_to_id: reply?.id,
       reply_to: reply
         ? {
@@ -545,7 +569,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     };
 
     setMessages((prev) => [...prev, optimistic]);
-    upsertConversationFromMessage(setConversations, optimistic, me, false);
+    upsertConversationFromMessage(setConversations, optimistic, me, false, usersById);
     forceScrollRef.current = true;
 
     try {
@@ -553,7 +577,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
       if (res && res.success && res.message) {
         const serverMsg = { ...res.message, key: `t-${cmid}`, _status: deriveStatus(res.message) };
         setMessages((prev) => mergeMessage(prev, serverMsg));
-        upsertConversationFromMessage(setConversations, res.message, me, false);
+        upsertConversationFromMessage(setConversations, res.message, me, false, usersById);
       } else {
         setMessages((prev) => prev.map((m) => (m._tempId === cmid ? { ...m, _status: "failed" } : m)));
       }
@@ -562,7 +586,7 @@ const ChatPage = ({ darkMode, onVoiceCall, onVideoCall, initialContact }) => {
     } finally {
       setReplyTarget(null);
     }
-  }, [me, myUsername, replyTarget]);
+  }, [me, myUsername, replyTarget, usersById]);
 
   const retryMessage = useCallback((msg) => {
     if (!msg || !msg._tempId) return;

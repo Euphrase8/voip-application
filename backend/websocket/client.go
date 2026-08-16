@@ -13,6 +13,8 @@ import (
 	"time"
 	"voip-backend/auth"
 	"voip-backend/config"
+	"voip-backend/database"
+	"voip-backend/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -31,6 +33,18 @@ const (
 	// Maximum message size allowed from peer
 	maxMessageSize = 32768
 )
+
+// cleanupActiveCallByChannel removes any active call record for the channel so
+// stale records can't block future calls with "User is busy".
+func cleanupActiveCallByChannel(channel string) {
+	if channel == "" {
+		return
+	}
+	result := database.GetDB().Where("channel = ?", channel).Delete(&models.ActiveCall{})
+	if result.Error == nil && result.RowsAffected > 0 {
+		log.Printf("[WS] Cleaned up active call for channel %s", channel)
+	}
+}
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -258,6 +272,7 @@ func (c *Client) handleMessage(msg Message) {
 			} else {
 				c.hub.BroadcastMessage(hangupMsg)
 			}
+			cleanupActiveCallByChannel(msg.Channel)
 		}
 
 	case "answer_call":
@@ -314,10 +329,11 @@ func (c *Client) handleMessage(msg Message) {
 		}
 
 	case "webrtc_call_rejected":
-		// Forward call rejection to caller
+		// Forward call rejection to caller and clean up the call record
 		if msg.To != "" {
 			c.hub.SendToExtension(msg.To, msg)
 		}
+		cleanupActiveCallByChannel(msg.Channel)
 
 	case "webrtc_offer":
 		// Forward WebRTC offer to target
@@ -338,16 +354,19 @@ func (c *Client) handleMessage(msg Message) {
 		}
 
 	case "webrtc_call_ended":
-		// Forward call end notification to peer
+		// Forward call end notification to peer and clean up the call record
 		if msg.To != "" {
 			c.hub.SendToExtension(msg.To, msg)
 		}
+		cleanupActiveCallByChannel(msg.Channel)
 
 	case "webrtc_call_cancelled":
 		// Forward call cancellation (caller cancelled while ringing) to peer
+		// and clean up the call record
 		if msg.To != "" {
 			c.hub.SendToExtension(msg.To, msg)
 		}
+		cleanupActiveCallByChannel(msg.Channel)
 
 	case "video_call_request":
 		// Forward video call request to target extension

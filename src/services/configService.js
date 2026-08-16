@@ -26,20 +26,35 @@ class ConfigService {
       
       // Try multiple possible backend locations
       const possibleHosts = this._getPossibleBackendHosts();
+      const seen = new Set();
       
       for (const host of possibleHosts) {
+        if (seen.has(host)) continue;
+        seen.add(host);
+
         try {
           console.log(`[ConfigService] Trying backend at: ${host}`);
           
-          const response = await fetch(`${host}/config`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            timeout: 5000,
-          });
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-          if (response.ok) {
+          let response;
+          try {
+            response = await fetch(`${host}/config`, {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(timeoutId);
+          }
+
+          // Only JSON config responses count as a valid backend. This skips
+          // pages served by the frontend dev server (HTML) without noise.
+          const contentType = response.headers.get('content-type') || '';
+          if (response.ok && contentType.includes('application/json')) {
             const data = await response.json();
             if (data.success && data.config) {
               this.config = {
@@ -54,10 +69,15 @@ class ConfigService {
               
               return this.config;
             }
+          } else {
+            console.log(`[ConfigService] ${host} is not a backend (HTTP ${response.status}, ${contentType || 'no content-type'}), skipping`);
           }
         } catch (error) {
-          console.log(`[ConfigService] Failed to load from ${host}:`, error.message);
-          continue;
+          if (error.name === 'AbortError') {
+            console.log(`[ConfigService] Timed out connecting to ${host}`);
+          } else {
+            console.log(`[ConfigService] Failed to load from ${host}:`, error.message);
+          }
         }
       }
 
@@ -76,11 +96,14 @@ class ConfigService {
     }
   }
 
-    // Get possible backend host locations
+  // Get possible backend host locations
   _getPossibleBackendHosts() {
     const currentHost = window.location.hostname;
     const protocol = window.location.protocol;
     const currentPort = window.location.port;
+
+    // The CRA dev server (port 3000) is never the backend.
+    const isDevServer = currentPort === '3000';
 
     // Get configured backend URL if available
     const configuredBackendUrl = ipConfigService.isConfigured()
@@ -89,10 +112,12 @@ class ConfigService {
 
     // The page's own origin (highest priority): when the app is served by the
     // backend itself, /config is available at the exact same origin over the
-    // same scheme (https/wss included). On a CRA dev server this falls through.
-    const sameOrigin = currentPort && !['80', '443'].includes(currentPort)
-      ? `${protocol}//${currentHost}:${currentPort}`
-      : `${protocol}//${currentHost}`;
+    // same scheme (https/wss included). Skipped on the CRA dev server.
+    const sameOrigin = !isDevServer
+      ? (currentPort && !['80', '443'].includes(currentPort)
+        ? `${protocol}//${currentHost}:${currentPort}`
+        : `${protocol}//${currentHost}`)
+      : null;
 
     return [
       sameOrigin,
@@ -113,7 +138,7 @@ class ConfigService {
       // Service discovery names
       `http://voip-backend:8080`,
       `http://backend.local:8080`,
-    ];
+    ].filter(Boolean);
   }
 
   // Fallback configuration when backend is unreachable

@@ -20,6 +20,53 @@ import (
 	"gorm.io/gorm"
 )
 
+// userHasLiveCall reports whether the target user is genuinely on a call. Stale
+// WebRTC records whose participants no longer have a live WebSocket (or that
+// have been ringing unanswered for over 90 seconds) are cleaned up and ignored,
+// so abandoned calls can't cause spurious "User is busy" errors.
+func userHasLiveCall(userID uint) bool {
+	db := database.GetDB()
+	hub := websocket.GetHub()
+
+	var calls []models.ActiveCall
+	if err := db.Where("(caller_id = ? OR callee_id = ?) AND status IN ('ringing', 'initiated', 'connected')", userID, userID).Find(&calls).Error; err != nil {
+		return false
+	}
+
+	for _, call := range calls {
+		if strings.HasPrefix(call.Channel, "webrtc-call-") {
+			// Ringing too long without an answer: treat as abandoned.
+			if (call.Status == "ringing" || call.Status == "initiated") && time.Since(call.StartTime) > 90*time.Second {
+				db.Delete(&call)
+				log.Printf("[CALL] Removed abandoned ringing WebRTC call %s", call.Channel)
+				continue
+			}
+
+			// A WebRTC call is only real while both parties have a live
+			// WebSocket connection.
+			if hub != nil {
+				var caller, callee models.User
+				callerFound := db.First(&caller, call.CallerID).Error == nil
+				calleeFound := db.First(&callee, call.CalleeID).Error == nil
+				callerLive := callerFound && hub.IsExtensionConnected(caller.Extension)
+				calleeLive := calleeFound && hub.IsExtensionConnected(callee.Extension)
+				if callerLive && calleeLive {
+					return true
+				}
+				db.Delete(&call)
+				log.Printf("[CALL] Removed stale WebRTC active call %s (peer disconnected)", call.Channel)
+				continue
+			}
+			return true
+		}
+
+		// Traditional SIP calls are managed by Asterisk AMI events; trust the record.
+		return true
+	}
+
+	return false
+}
+
 // InitiateCall handles call initiation
 func InitiateCall(c *gin.Context) {
 	userID, username, extension, _, ok := middleware.GetUserFromContext(c)
@@ -83,10 +130,8 @@ func InitiateCall(c *gin.Context) {
 
 	// Check if target user is busy (has active calls)
 	if isWSConnected {
-		var activeCallCount int64
-		database.GetDB().Model(&models.ActiveCall{}).Where("(caller_id = ? OR callee_id = ?) AND status IN ('ringing', 'connected')", targetUser.ID, targetUser.ID).Count(&activeCallCount)
-		if activeCallCount > 0 {
-			log.Printf("[CALL] User %s is busy (active calls: %d)", req.TargetExtension, activeCallCount)
+		if userHasLiveCall(targetUser.ID) {
+			log.Printf("[CALL] User %s is busy (has a live active call)", req.TargetExtension)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "User is busy",
 				"success": false,
@@ -808,10 +853,8 @@ func initiateWebRTCCall(c *gin.Context, userID uint, username, extension string,
 	}
 
 	// Check if target user is busy
-	var activeCallCount int64
-	database.GetDB().Model(&models.ActiveCall{}).Where("(caller_id = ? OR callee_id = ?) AND status IN ('ringing', 'connected')", targetUser.ID, targetUser.ID).Count(&activeCallCount)
-	if activeCallCount > 0 {
-		log.Printf("[WEBRTC] User %s is busy (active calls: %d)", req.TargetExtension, activeCallCount)
+	if userHasLiveCall(targetUser.ID) {
+		log.Printf("[WEBRTC] User %s is busy (has a live active call)", req.TargetExtension)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "User is busy",
 			"success": false,

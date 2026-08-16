@@ -66,6 +66,7 @@ func InitDatabase() {
 
 		&models.CallRecording{},
 		&models.VoicemailSettings{},
+		&models.SetupState{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)

@@ -26,8 +26,21 @@ import ipConfigService from './services/ipConfigService';
 import { testMicrophoneAccess } from './utils/microphoneDiagnostics';
 import MicrophoneTestPage from './pages/MicrophoneTestPage';
 import videoCallService from './services/videoCallService';
+import { getAuthUserId } from './services/login';
 import IncomingCallOverlay from './components/calls/IncomingCallOverlay';
 import VideoCallScreen from './components/calls/VideoCallScreen';
+
+// URL of the public setup-status endpoint. When the app is served by the
+// backend the API lives on the same origin; on the CRA dev server the backend
+// is on :8080.
+const setupStatusUrl = () => {
+  const { protocol, hostname, port } = window.location;
+  if (port === '3000') return `http://${hostname}:8080/api/setup/status`;
+  if (protocol === 'https:' || port === '8080' || port === '8443') {
+    return `${window.location.origin}/api/setup/status`;
+  }
+  return `http://${hostname}:8080/api/setup/status`;
+};
 
 const App = () => {
   const navigate = useNavigate();
@@ -35,6 +48,7 @@ const App = () => {
   const [sipPassword, setSipPassword] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [setupConfigured, setSetupConfigured] = useState(null);
   const [notification, setNotification] = useState(null);
   const [isRegistered, setIsRegistered] = useState(false);
   const [showMicrophoneFix, setShowMicrophoneFix] = useState(false);
@@ -51,27 +65,62 @@ const App = () => {
     // Start listening for video call signaling on the shared WebSocket.
     videoCallService.init();
 
-    // Check if IP configuration is required first (skip if already authed)
-    if (!ipConfigService.isConfigured() && !token) {
-      console.log('[App.js] IP configuration required, redirecting to /ip-config');
-      if (window.location.pathname !== '/ip-config') {
-        navigate('/ip-config', { replace: true });
+    // Decide whether the setup page is required. The server-side state is the
+    // source of truth so that once setup is complete, user devices go straight
+    // to the app instead of loading /ip-config.
+    const decideSetup = async () => {
+      let configured = null;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(setupStatusUrl(), { signal: controller.signal });
+        clearTimeout(timeout);
+        if (res.ok) {
+          const data = await res.json();
+          configured = !!(data.success && data.configured);
+        }
+      } catch (e) {}
+
+      // Backend unreachable: fall back to the per-device flag.
+      if (configured === null) {
+        configured = ipConfigService.isConfigured();
       }
-      return;
-    }
+      setSetupConfigured(configured);
 
-    const extension = localStorage.getItem('extension');
-    const storedSipPassword = localStorage.getItem('sipPassword');
-    const userRole = localStorage.getItem('userRole') || 'user';
+      // Require IP configuration first (only when not already authed).
+      if (!configured && !token) {
+        console.log('[App.js] IP configuration required, redirecting to /ip-config');
+        if (window.location.pathname !== '/ip-config') {
+          navigate('/ip-config', { replace: true });
+        }
+        return;
+      }
 
-    if (token && extension && storedSipPassword) {
-      setUser({ username: 'User', extension, role: userRole });
-      setSipPassword(storedSipPassword);
-      initializeConnection(extension);
-    } else if (!token && window.location.pathname !== '/login' && window.location.pathname !== '/register' && window.location.pathname !== '/ip-config') {
-      console.log('[App.js] No token, redirecting to /login');
-      navigate('/login', { replace: true });
-    }
+      const extension = localStorage.getItem('extension');
+      const storedSipPassword = localStorage.getItem('sipPassword');
+      const userRole = localStorage.getItem('userRole') || 'user';
+
+      if (token && extension && storedSipPassword) {
+        // The token's user_id is authoritative; use it to repair a stale or
+        // missing stored id so chat alignment (mine vs received) stays correct.
+        const tokenUserId = getAuthUserId();
+        if (tokenUserId && Number(localStorage.getItem('user_id')) !== tokenUserId) {
+          localStorage.setItem('user_id', String(tokenUserId));
+        }
+        setUser({
+          id: tokenUserId || undefined,
+          username: 'User',
+          extension,
+          role: userRole
+        });
+        setSipPassword(storedSipPassword);
+        initializeConnection(extension);
+      } else if (!token && window.location.pathname !== '/login' && window.location.pathname !== '/register' && window.location.pathname !== '/ip-config') {
+        console.log('[App.js] No token, redirecting to /login');
+        navigate('/login', { replace: true });
+      }
+    };
+    decideSetup();
   }, [navigate]);
 
   useEffect(() => {
@@ -168,6 +217,7 @@ const App = () => {
         role
       });
       setUser({
+        id: result.user?.id,
         username: result.user?.username || 'User',
         extension,
         role
@@ -339,9 +389,11 @@ const App = () => {
           element={token ? <MicrophoneTestPage darkMode={darkMode} /> : <Navigate to="/login" replace />}
         />
         <Route path="/" element={
-          ipConfigService.isConfigured()
-            ? <Navigate to="/login" replace />
-            : <Navigate to="/ip-config" replace />
+          setupConfigured === null
+            ? <Loader />
+            : setupConfigured
+              ? <Navigate to="/login" replace />
+              : <Navigate to="/ip-config" replace />
         } />
       </Routes>
 

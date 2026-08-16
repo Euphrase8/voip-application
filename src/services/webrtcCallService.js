@@ -879,11 +879,18 @@ class WebRTCCallService {
     console.log('[WebRTCCallService] Ending call...');
 
     if (this.currentCall) {
-      // Send single WebRTC call ended message — backend handles cleanup
+      // Send single WebRTC call ended message — backend handles cleanup.
+      // For outgoing calls the peer is the target; for incoming calls it is
+      // the caller.
+      const peer =
+        this.currentCall.type === 'outgoing'
+          ? this.currentCall.target
+          : (this.currentCall.caller || this.currentCall.target);
+
       this.sendMessage({
         type: 'webrtc_call_ended',
         call_id: this.currentCall.id,
-        to: this.currentCall.caller || this.currentCall.target,
+        to: peer,
         from: this.extension,
         channel: this.currentCall.id
       });

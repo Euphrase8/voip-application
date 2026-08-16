@@ -133,16 +133,28 @@ export const clearUnread = (setConversations, userId) => {
 };
 
 // Update the conversation list when a message is created/received.
-export const upsertConversationFromMessage = (setConversations, msg, me, incrementUnread) => {
+// `usersById` (Map<id, user>) is used to backfill the other party's name and
+// extension whenever the message payload does not carry them (optimistic
+// sends, WS pushes, server responses without a preloaded receiver profile).
+// Conversations for missing/self ids are never created, so the list can't
+// show bogus "Ext undefined" entries.
+export const upsertConversationFromMessage = (setConversations, msg, me, incrementUnread, usersById) => {
+  if (!msg) return;
   const mine = String(msg.sender_id) === String(me);
-  const other = mine
+  const otherId = mine ? msg.receiver_id : msg.sender_id;
+  if (otherId === undefined || otherId === null || String(otherId) === String(me)) return;
+
+  let other = mine
     ? { id: msg.receiver_id, ...(msg.receiver || {}) }
     : { id: msg.sender_id, ...(msg.sender || {}) };
+  if (!other.username && !other.name && !other.extension && usersById) {
+    other = { ...other, ...(usersById.get(Number(otherId)) || {}) };
+  }
 
   setConversations((prev) => {
     let found = false;
     const next = prev.map((c) => {
-      if (String(c.user.id) === String(other.id)) {
+      if (c && c.user && String(c.user.id) === String(other.id)) {
         found = true;
         const unread = incrementUnread ? (c.unread_count || 0) + 1 : c.unread_count || 0;
         return {
@@ -169,6 +181,11 @@ export const upsertConversationFromMessage = (setConversations, msg, me, increme
     return sortConversations(next);
   });
 };
+
+// Drop any conversation whose "other user" lacks a usable id (stale artifacts
+// from an earlier session can otherwise linger in the list as "Ext undefined").
+export const sanitizeConversations = (list) =>
+  (list || []).filter((c) => c && c.user && c.user.id !== undefined && c.user.id !== null);
 
 // Set a conversation's preview text/timestamp (used after a message is deleted).
 export const updateConversationPreview = (setConversations, otherUserId, lastMessage, lastMessageAt) => {
