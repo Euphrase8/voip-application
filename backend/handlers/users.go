@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"voip-backend/asterisk"
 	"voip-backend/database"
 	"voip-backend/middleware"
 	"voip-backend/models"
@@ -364,6 +365,13 @@ func DeleteUser(c *gin.Context) {
 
 	// Clean up on-disk recordings for the deleted user
 	go removeUserFiles(removedFiles)
+
+	// Remove PJSIP endpoint from Asterisk
+	go func() {
+		if err := asterisk.RemoveEndpoint(user.Extension); err != nil {
+			log.Printf("Warning: Failed to remove Asterisk endpoint for extension %s: %v", user.Extension, err)
+		}
+	}()
 
 	// Forcefully disconnect the deleted user's WebSocket sessions
 	hub := websocket.GetHub()
@@ -918,6 +926,13 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
+	// Create PJSIP endpoint in Asterisk so the extension can register and receive calls
+	go func() {
+		if err := asterisk.AddEndpoint(extension, user.SIPPassword); err != nil {
+			log.Printf("Warning: Failed to add Asterisk endpoint for extension %s: %v", extension, err)
+		}
+	}()
+
 	log.Printf("Admin created new user: %s (extension: %s, role: %s)", user.Username, user.Extension, user.Role)
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -1090,6 +1105,8 @@ func UpdateUser(c *gin.Context) {
 
 	// Apply updates if any
 	if len(updates) > 0 {
+		oldExtension := user.Extension
+
 		if err := database.GetDB().Model(&user).Updates(updates).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to update user",
@@ -1103,6 +1120,16 @@ func UpdateUser(c *gin.Context) {
 				"error": "Failed to reload user data",
 			})
 			return
+		}
+
+		// If the extension changed, update the Asterisk PJSIP endpoint
+		if user.Extension != oldExtension {
+			go func() {
+				asterisk.RemoveEndpoint(oldExtension)
+				if err := asterisk.AddEndpoint(user.Extension, user.SIPPassword); err != nil {
+					log.Printf("Warning: Failed to add Asterisk endpoint for new extension %s: %v", user.Extension, err)
+				}
+			}()
 		}
 
 		log.Printf("Admin updated user: %s (ID: %d)", user.Username, user.ID)

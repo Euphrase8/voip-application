@@ -299,19 +299,13 @@ func HangupCall(c *gin.Context) {
 	// Check if this is a WebRTC call
 	isWebRTCCall := strings.HasPrefix(req.Channel, "webrtc-call-")
 
-	// Find the active call
+	// Find the active call (may not exist for WebRTC or if the record was already cleaned up)
 	var activeCall models.ActiveCall
+	hasActiveCall := false
 	if err := database.GetDB().Where("channel = ? AND (caller_id = ? OR callee_id = ?)", req.Channel, userID, userID).First(&activeCall).Error; err != nil {
-		if isWebRTCCall {
-			// For WebRTC calls, if no active call record found, still proceed with WebSocket notification
-			log.Printf("[HANGUP] WebRTC call record not found, proceeding with WebSocket notification")
-		} else {
-			log.Printf("[HANGUP] Active call not found for channel: %s, user: %s", req.Channel, extension)
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": "Active call not found",
-			})
-			return
-		}
+		log.Printf("[HANGUP] No active call record for channel %s (user %s), proceeding with best-effort hangup", req.Channel, extension)
+	} else {
+		hasActiveCall = true
 	}
 
 	// Hangup the call through appropriate method
@@ -319,20 +313,16 @@ func HangupCall(c *gin.Context) {
 		log.Printf("[HANGUP] Handling WebRTC call hangup for channel: %s", req.Channel)
 		// For WebRTC calls, we don't need to call Asterisk
 	} else {
-		// Hangup traditional calls through Asterisk
+		// Hangup traditional calls through Asterisk (best-effort even if no DB record)
 		if err := asterisk.HangupCall(req.Channel); err != nil {
-			log.Printf("[HANGUP] Asterisk hangup failed for channel %s: %v", req.Channel, err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to hangup call: " + err.Error(),
-			})
-			return
+			log.Printf("[HANGUP] Asterisk hangup failed for channel %s: %v (continuing cleanup)", req.Channel, err)
 		}
 	}
 
 	var duration int
 
 	// Calculate call duration and handle database operations only if activeCall exists
-	if activeCall.ID != 0 {
+	if hasActiveCall {
 		duration = int(time.Since(activeCall.StartTime).Seconds())
 
 		// Update call log

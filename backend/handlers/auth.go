@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"time"
+	"voip-backend/asterisk"
 	"voip-backend/auth"
 	"voip-backend/database"
 	"voip-backend/models"
@@ -161,6 +163,13 @@ func Register(c *gin.Context) {
 		})
 		return
 	}
+
+	// Create PJSIP endpoint in Asterisk so the extension can register and receive calls
+	go func() {
+		if err := asterisk.AddEndpoint(extension, user.SIPPassword); err != nil {
+			log.Printf("Warning: Failed to add Asterisk endpoint for extension %s: %v", extension, err)
+		}
+	}()
 
 	c.JSON(http.StatusCreated, gin.H{
 		"success":      true,
