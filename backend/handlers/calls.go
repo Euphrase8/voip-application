@@ -356,14 +356,47 @@ func HangupCall(c *gin.Context) {
 		log.Printf("[HANGUP] Sending WebSocket hangup notification for WebRTC call: %s", req.Channel)
 		hub := websocket.GetHub()
 		if hub != nil {
-			// Send a general hangup message
-			hangupMsg := websocket.Message{
-				Type:    "call_ended",
-				From:    extension,
-				Channel: req.Channel,
-				Status:  "ended",
+			if isWebRTCCall {
+				// For WebRTC calls, try to find the peer from the call log and send them a
+				// webrtc_call_ended notification (the callee's WebRTC service listens for this type).
+				var peerExtension string
+				var callLog models.CallLog
+				if err := database.GetDB().Where("channel = ?", req.Channel).First(&callLog).Error; err == nil {
+					if callLog.CallerID != 0 && callLog.CalleeID != 0 {
+						var caller, callee models.User
+						database.GetDB().First(&caller, callLog.CallerID)
+						database.GetDB().First(&callee, callLog.CalleeID)
+						if caller.ID == userID {
+							peerExtension = callee.Extension
+						} else {
+							peerExtension = caller.Extension
+						}
+					}
+				}
+
+				hangupMsg := websocket.Message{
+					Type:    "webrtc_call_ended",
+					From:    extension,
+					Channel: req.Channel,
+					Status:  "ended",
+				}
+				if peerExtension != "" {
+					if err := hub.SendToExtension(peerExtension, hangupMsg); err != nil {
+						log.Printf("[HANGUP] Failed to send webrtc_call_ended to %s: %v, falling back to broadcast", peerExtension, err)
+						hub.BroadcastMessage(hangupMsg)
+					}
+				} else {
+					hub.BroadcastMessage(hangupMsg)
+				}
+			} else {
+				hangupMsg := websocket.Message{
+					Type:    "call_ended",
+					From:    extension,
+					Channel: req.Channel,
+					Status:  "ended",
+				}
+				hub.BroadcastMessage(hangupMsg)
 			}
-			hub.BroadcastMessage(hangupMsg)
 		}
 		duration = 0
 	}

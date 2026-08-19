@@ -144,6 +144,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   const [notification, setNotification] = useState(null);
   const [incomingCall, setLocalIncomingCall] = useState(null);
   const [incomingCallAcceptedData, setIncomingCallAcceptedData] = useState(null);
+  const [outgoingCallId, setOutgoingCallId] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
 
 
@@ -238,6 +239,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
           setCallStatus(null);
           setActiveCallContact(null);
           setIncomingCallAcceptedData(null);
+          setOutgoingCallId(null);
           toast('Call ended', { duration: 3000 });
         }
       );
@@ -409,13 +411,17 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
         `Calling ${contact.name || contact.extension}...`
       );
 
-      const { channel } = await call(contact.extension);
+      const result = await call(contact.extension);
+      if (result.method === 'webrtc' && result.call_id) {
+        setOutgoingCallId(result.call_id);
+      }
       setCallStatus("Connected");
       notificationService.callConnected(contact.extension);
     } catch (error) {
       console.error("[Dashboard] Call error:", error);
       setCallStatus("Call failed");
       notificationService.callFailed(contact.extension, error.message);
+      setOutgoingCallId(null);
 
       setTimeout(() => {
         setCallStatus(null);
@@ -438,7 +444,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   const endCall = async () => {
     if (activeCallContact && callStatus) {
       try {
-        const channel = incomingCallAcceptedData?.channel || `PJSIP/${activeCallContact.extension}`;
+        const channel = incomingCallAcceptedData?.channel || outgoingCallId || `PJSIP/${activeCallContact.extension}`;
         await comprehensiveHangup(channel);
 
         // Add notification for call ended
@@ -458,6 +464,7 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     setCallStatus(null);
     setActiveCallContact(null);
     setIncomingCallAcceptedData(null);
+    setOutgoingCallId(null);
   };
 
 
@@ -535,12 +542,12 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
           contact={activeCallContact}
           callStatus={callStatus}
           onEndCall={endCall}
-          channel={incomingCallAcceptedData?.channel || `PJSIP/${activeCallContact.extension}`}
+          channel={incomingCallAcceptedData?.channel || outgoingCallId || `PJSIP/${activeCallContact.extension}`}
           darkMode={isDarkMode}
           isOutgoing={!incomingCallAcceptedData}
-          callAccepted={!!incomingCallAcceptedData}
-          isWebRTCCall={!!incomingCallAcceptedData?.isWebRTCCall}
-          callId={incomingCallAcceptedData?.callId}
+          callAccepted={!!incomingCallAcceptedData || !!outgoingCallId}
+          isWebRTCCall={!!incomingCallAcceptedData?.isWebRTCCall || !!outgoingCallId}
+          callId={incomingCallAcceptedData?.callId || outgoingCallId}
         />
       )}
 
