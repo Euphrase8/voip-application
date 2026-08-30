@@ -1,8 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import JsSIP from 'jssip';
 import { connectWebSocket, getConnectionStatus } from '../services/websocketservice';
-import { CONFIG } from '../services/config';
+import sipManager from '../services/sipManager';
 
 const SipClient = ({ extension, sipPassword }) => {
   const uaRef = useRef(null);
@@ -39,160 +38,47 @@ const SipClient = ({ extension, sipPassword }) => {
       return;
     }
 
-    // Prevent multiple UA instances
-    if (uaRef.current && uaRef.current.isConnected()) {
-      console.log('[SipClient] SIP UA already connected for extension:', extension);
+    // Reuse singleton sipManager to avoid duplicate SIP sessions for same extension
+    if (sipManager.ua) {
+      uaRef.current = sipManager.ua;
+      console.log('[SipClient] Reusing singleton SIP UA for', extension);
+      window.dispatchEvent(new CustomEvent('registrationStatus', {
+        detail: { extension, registered: sipManager.isRegistered },
+      }));
       return;
     }
 
     try {
-      // Check WebSocket connection status and connect if necessary
+      // Ensure shared backend WebSocket is up (no duplicate)
       const { isConnected, extension: activeExt } = getConnectionStatus();
       if (!isConnected || activeExt !== extension) {
-        const websocket = connectWebSocket(extension);
-
-        // Set up WebSocket message handler
-        websocket.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data);
-            console.log('[SipClient] WS message:', msg);
-          } catch (error) {
-            console.error('[SipClient] Failed to parse WebSocket message:', error);
-          }
-        };
-
-        // Set up WebSocket error handler
-        websocket.onerror = () => {
-          console.log('[SipClient] WS status: error');
-          window.dispatchEvent(new CustomEvent('registrationStatus', {
-            detail: { extension, registered: false, cause: 'WebSocket error' },
-          }));
-        };
+        connectWebSocket(extension);
       }
 
-      // Setup JsSIP UA with correct config
-      const socket = new JsSIP.WebSocketInterface(CONFIG.SIP_WS_URL, { protocols: ['sip'] });
+      await sipManager.initialize(extension, sipPassword);
+      uaRef.current = sipManager.ua;
 
-      const config = {
-        sockets: [socket],
-        uri: `sip:${extension}@${CONFIG.SIP_SERVER}:${CONFIG.SIP_PORT}`,
-        display_name: `User ${extension}`,
-        contact_uri: `sip:${extension}@${CONFIG.CLIENT_IP};transport=${CONFIG.SIP_TRANSPORT}`,
-        password: sipPassword,
-        register: true,
-        session_timers: false,
-        connection_recovery_min_interval: 2,
-        connection_recovery_max_interval: 30,
-        connection_timeout: 15000,
-        register_expires: 300, // 5 minutes registration expiry
-        no_answer_timeout: 30, // 30 seconds no answer timeout
-      };
-
-      console.debug('[SipClient] JsSIP config:', config);
-
-      uaRef.current = new JsSIP.UA(config);
-
-      uaRef.current.on('connected', () => {
-        console.log(`[SipClient] SIP UA connected for ${extension}`);
-        reconnectAttemptsRef.current = 0;
-      });
-
-      uaRef.current.on('disconnected', () => {
-        console.warn(`[SipClient] SIP UA disconnected for ${extension}`);
-        window.dispatchEvent(new CustomEvent('registrationStatus', {
-          detail: { extension, registered: false },
-        }));
-        attemptReconnect();
-      });
-
-      uaRef.current.on('registered', () => {
-        console.log(`[SipClient] SIP UA registered for ${extension}`);
+      sipManager.on('registered', () => {
+        window.dispatchEvent(new CustomEvent('registrationStatus', { detail: { extension, registered: true } }));
         localStorage.setItem(`sipRegistered_${extension}`, 'true');
-        window.dispatchEvent(new CustomEvent('registrationStatus', {
-          detail: { extension, registered: true },
-        }));
       });
-
-      uaRef.current.on('unregistered', () => {
-        console.warn(`[SipClient] SIP UA unregistered for ${extension}`);
+      sipManager.on('unregistered', () => {
+        window.dispatchEvent(new CustomEvent('registrationStatus', { detail: { extension, registered: false } }));
         localStorage.removeItem(`sipRegistered_${extension}`);
-        window.dispatchEvent(new CustomEvent('registrationStatus', {
-          detail: { extension, registered: false },
-        }));
       });
-
-      uaRef.current.on('registrationFailed', (data) => {
-        console.error('[SipClient] SIP registration failed:', data.cause);
+      sipManager.on('registrationFailed', (cause) => {
+        window.dispatchEvent(new CustomEvent('registrationStatus', { detail: { extension, registered: false, cause } }));
         localStorage.removeItem(`sipRegistered_${extension}`);
-        window.dispatchEvent(new CustomEvent('registrationStatus', {
-          detail: { extension, registered: false, cause: data.cause },
+      });
+
+      // Bridge sipManager incoming calls to window events for legacy listeners (generic for any extension)
+      sipManager.on('incomingCall', (data) => {
+        window.dispatchEvent(new CustomEvent('incomingCall', {
+          detail: { from: data.from, channel: `${data.from}@${sipManager.extension}`, session: data.session },
         }));
-        if (data.cause === 'Unauthorized') {
-          console.log('[SipClient] Retrying after 401 Unauthorized...');
-          attemptReconnect();
-        }
       });
 
-      uaRef.current.on('newRTCSession', ({ session }) => {
-        if (session.direction === 'incoming') {
-          console.log('[SipClient] Incoming call from', session.remote_identity.uri.user);
-
-          // Set up session event handlers for incoming calls
-          session.on('accepted', () => {
-            console.log('[SipClient] Incoming call accepted');
-          });
-
-          session.on('ended', () => {
-            console.log('[SipClient] Incoming call ended');
-          });
-
-          session.on('failed', (data) => {
-            console.log('[SipClient] Incoming call failed:', data.cause);
-          });
-
-          window.dispatchEvent(new CustomEvent('incomingCall', {
-            detail: {
-              from: session.remote_identity.uri.user,
-              channel: `${session.remote_identity.uri.user}@${CONFIG.SIP_SERVER}`,
-              session,
-            },
-          }));
-        } else if (session.direction === 'outgoing') {
-          console.log('[SipClient] Outgoing call to', session.remote_identity.uri.user);
-
-          // Set up session event handlers for outgoing calls
-          session.on('progress', () => {
-            console.log('[SipClient] Outgoing call progress');
-            window.dispatchEvent(new CustomEvent('callProgress', {
-              detail: { status: 'ringing' }
-            }));
-          });
-
-          session.on('accepted', () => {
-            console.log('[SipClient] Outgoing call accepted');
-            window.dispatchEvent(new CustomEvent('callAccepted', {
-              detail: { session }
-            }));
-          });
-
-          session.on('ended', () => {
-            console.log('[SipClient] Outgoing call ended');
-            window.dispatchEvent(new CustomEvent('callEnded', {
-              detail: { reason: 'normal' }
-            }));
-          });
-
-          session.on('failed', (data) => {
-            console.log('[SipClient] Outgoing call failed:', data.cause);
-            window.dispatchEvent(new CustomEvent('callFailed', {
-              detail: { cause: data.cause }
-            }));
-          });
-        }
-      });
-
-      uaRef.current.start();
-      console.debug('[SipClient] SIP UA started for', extension);
+      console.log('[SipClient] SIP UA initialized via singleton for', extension);
     } catch (err) {
       console.error('[SipClient] SIP init error:', err.message);
       window.dispatchEvent(new CustomEvent('registrationStatus', {
@@ -203,17 +89,16 @@ const SipClient = ({ extension, sipPassword }) => {
   }, [extension, sipPassword, attemptReconnect]);
 
   useEffect(() => {
-    // Only initialize if extension and password are provided
     if (extension && sipPassword) {
       initializeSip();
     }
-
     return () => {
-      if (uaRef.current) {
+      // Do not stop singleton UA here — it is shared across components (no duplicate sessions, but single owner is Dashboard/App)
+      if (uaRef.current && uaRef.current !== sipManager.ua) {
         console.log('[SipClient] Stopping SIP UA...');
         uaRef.current.stop();
-        uaRef.current = null;
       }
+      uaRef.current = null;
     };
   }, [extension, sipPassword, initializeSip]);
 

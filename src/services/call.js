@@ -268,12 +268,15 @@ export const hangupCall = async (session = null) => {
 export const initializeSIP = async ({ extension }, onIncomingCall, useWebRTC = true) => {
   console.log(`[initializeSIP] Initializing SIP for extension: ${extension}, WebRTC mode: ${useWebRTC}`);
 
-  // Initialize WebRTC service if using WebRTC mode
+  // Initialize WebRTC service if using WebRTC mode — idempotent, no duplicate SIP sessions
   if (useWebRTC) {
     console.log('[initializeSIP] Using WebRTC mode - initializing WebRTC service');
-
     try {
-      // Initialize WebRTC service for both incoming and outgoing calls
+      // Avoid overwriting an existing Dashboard-owned callback for the same extension
+      if (webrtcCallService.extension === extension && webrtcCallService.onIncomingCall) {
+        console.log('[initializeSIP] WebRTC already initialized for', extension, '- reusing existing subscription');
+        return { success: true, method: 'webrtc', service: webrtcCallService };
+      }
       webrtcCallService.initialize(
         extension,
         onIncomingCall,
@@ -284,7 +287,6 @@ export const initializeSIP = async ({ extension }, onIncomingCall, useWebRTC = t
           console.log('[initializeSIP] WebRTC call ended');
         }
       );
-
       console.log('[initializeSIP] WebRTC service initialized successfully');
       return { success: true, method: 'webrtc', service: webrtcCallService };
     } catch (error) {

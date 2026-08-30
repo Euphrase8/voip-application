@@ -2,9 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button, TextField, Tooltip } from '@mui/material';
 import { Call, CallEnd } from '@mui/icons-material';
 import { hangup } from '../services/hang';
-import { sendWebSocketMessage } from '../services/websocketservice';
+import { sendWebSocketMessage, addMessageListener, connectWebSocket } from '../services/websocketservice';
 import { getToken } from '../services/login';
-import JsSIP from 'jssip';
 import { CONFIG } from '../services/config';
 import sipManager from '../services/sipManager';
 
@@ -39,70 +38,57 @@ const VoipPhone = ({
   }, [incomingStream, incomingPeerConnection, onCallStatusChange]);
 
   const setupWebSocket = useCallback(() => {
-    if (!extension || incomingStream) return; // Skip for incoming calls
-    const token = getToken();
-    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
-    const wsUrl = `${CONFIG.WS_URL}?extension=${encodeURIComponent(extension)}${tokenParam}`;
-    wsRef.current = new WebSocket(wsUrl);
-
-    wsRef.current.onopen = () => {
-      console.log('WebSocket connected for VoIP');
-      setStatus('WebSocket connected');
-    };
-
-    wsRef.current.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      console.log('WebSocket message:', message);
-      if (message.type === 'call-status') {
-        setCallStatus(message.status);
-        onCallStatusChange(message.status);
-      }
-    };
-
-    wsRef.current.onclose = () => {
-      console.log('WebSocket disconnected');
-      setStatus('WebSocket disconnected');
-    };
-
-    return () => {
-      if (wsRef.current) wsRef.current.close();
-    };
+    if (!extension || incomingStream) return;
+    // Reuse shared WebSocket via websocketservice — no duplicate SIP sessions
+    try { connectWebSocket(extension); } catch {}
+    setStatus('WebSocket connected');
+    const unsubscribe = addMessageListener((event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'call-status' || message.type === 'call_status') {
+          setCallStatus(message.status || message.Status);
+          onCallStatusChange && onCallStatusChange(message.status || message.Status);
+        }
+      } catch {}
+    });
+    return () => unsubscribe();
   }, [extension, onCallStatusChange, incomingStream]);
 
   useEffect(() => {
     if (incomingStream) return; // Skip SIP setup for incoming calls
 
-    // Use sipManager's UA if available to avoid duplicate registrations
-    if (sipManager.ua && sipManager.ua.isConnected()) {
+    // Single source of truth for SIP — reuse singleton sipManager to avoid duplicate sessions
+    if (sipManager.ua) {
       uaRef.current = sipManager.ua;
-      setStatus('Registered');
-      return;
+      setStatus(sipManager.isRegistered ? 'Registered' : 'Connected');
+      // Subscribe to singleton events for status updates (generic for any extension)
+      const onReg = () => setStatus('Registered');
+      const onUnreg = () => setStatus('Unregistered');
+      const onFailed = (e) => setStatus(`Registration failed: ${e?.cause || e}`);
+      sipManager.on('registered', onReg);
+      sipManager.on('unregistered', onUnreg);
+      sipManager.on('registrationFailed', onFailed);
+      return () => {
+        sipManager.off('registered', onReg);
+        sipManager.off('unregistered', onUnreg);
+        sipManager.off('registrationFailed', onFailed);
+      };
     }
 
-    JsSIP.debug.enable('JsSIP:*');
-    const socket = new JsSIP.WebSocketInterface(CONFIG.SIP_WS_URL);
-    const configuration = {
-      sockets: [socket],
-      uri: `sip:${extension}@${CONFIG.SIP_SERVER}`,
-      password,
-      register: true,
-    };
-
-    uaRef.current = new JsSIP.UA(configuration);
-
-    uaRef.current.on('connected', () => setStatus('Connected'));
-    uaRef.current.on('disconnected', () => setStatus('Disconnected'));
-    uaRef.current.on('registered', () => setStatus('Registered'));
-    uaRef.current.on('unregistered', () => setStatus('Unregistered'));
-    uaRef.current.on('registrationFailed', (e) => setStatus(`Registration failed: ${e.cause}`));
-
-    uaRef.current.start();
+    // No existing UA — initialize via singleton (no duplicate JsSIP instance here)
+    let cancelled = false;
+    sipManager.initialize(extension, password).then(() => {
+      if (!cancelled) {
+        uaRef.current = sipManager.ua;
+        setStatus('Registered');
+      }
+    }).catch((e) => {
+      if (!cancelled) setStatus(`Registration failed: ${e.message}`);
+    });
 
     return () => {
-      // Only stop if we created this UA (not sipManager's)
-      if (uaRef.current && uaRef.current !== sipManager.ua) {
-        uaRef.current.stop();
-      }
+      cancelled = true;
+      // Do not stop singleton UA here; owner (App/Dashboard) manages lifecycle
     };
   }, [extension, password]);
 

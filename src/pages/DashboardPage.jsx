@@ -12,7 +12,7 @@ import {
   FiMessageSquare as Chat,
   FiMail as MailIcon,
 } from "react-icons/fi";
-import { Voicemail as VoicemailIcon, Smartphone } from 'lucide-react';
+import { Voicemail as VoicemailIcon } from 'lucide-react';
 import toast from "react-hot-toast";
 import HomePage from "./HomePage";
 import SettingsPage from "./SettingsPage";
@@ -25,19 +25,20 @@ import SettingsModal from "../components/SettingsModal";
 import NotificationsPage from "./NotificationsPage";
 import ChatPage from "./ChatPage";
 import VoicemailPage from "./VoicemailPage";
-import SoftphoneGuidePage from "./SoftphoneGuidePage";
 import statusService from "../services/statusService";
 import { getVoicemailUnreadCount } from "../services/voicemail";
-import { getWebSocket } from "../services/websocketservice";
+import { getWebSocket, connectWebSocket, addMessageListener } from "../services/websocketservice";
 
 import { call } from "../services/call";
 import { hangupCall as comprehensiveHangup } from "../services/hangupService";
 import webrtcCallService from "../services/webrtcCallService";
 import videoCallService from "../services/videoCallService";
+import sipManager from "../services/sipManager";
 import ConnectionStatus from "../components/ConnectionStatus";
 import { useTheme } from "../contexts/ThemeContext";
 import notificationService from "../utils/notificationService";
 import { cn } from "../utils/ui";
+import { startRingback, stopRinging } from "../utils/ringtone";
 import {
   ResponsiveContainer,
   ResponsiveText,
@@ -214,15 +215,22 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
     }
   }, [location, navigate, user?.extension]);
 
-  // Initialize WebRTC service
+  // Initialize WebRTC service — single shared WebSocket, generic for any extension
   useEffect(() => {
     if (user?.extension) {
       console.log('[Dashboard] Initializing WebRTC service for extension:', user.extension);
+      // Ensure shared WebSocket is up before subscribing
+      try { connectWebSocket(user.extension); } catch {}
 
       webrtcCallService.initialize(
         user.extension,
         (incomingCallData) => {
           console.log('[Dashboard] Incoming WebRTC call:', incomingCallData);
+          // Only show overlay if not already in a call — prevents duplicate sessions
+          if (activeCallContact || incomingCall) {
+            console.log('[Dashboard] Already in call, ignoring new invitation', incomingCallData);
+            return;
+          }
           setLocalIncomingCall(incomingCallData);
           setNotification({
             message: `📞 ${incomingCallData.fromUsername || incomingCallData.caller_username || `Extension ${incomingCallData.from}`} is calling`,
@@ -231,7 +239,13 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
         },
         (status) => {
           console.log('[Dashboard] WebRTC call status:', status);
-          setCallStatus(status);
+          // Normalize "Ringing" vs "Connected" — avoid premature Connected on caller side
+          if (status === 'Call rejected' || status === 'Call ended' || status === 'Connected') {
+            // Let caller side handle via webrtc events; but reflect status
+            setCallStatus(status);
+          } else {
+            setCallStatus(status);
+          }
         },
         () => {
           console.log('[Dashboard] WebRTC call ended by peer');
@@ -245,17 +259,15 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
       );
 
       return () => {
-        webrtcCallService.cleanup();
+        // Per-call cleanup, but keep shared WebSocket alive for future invites
+        webrtcCallService.cleanup(true);
       };
     }
   }, [user?.extension]);
 
-  // Global WebSocket notification listener
+  // Global WebSocket notification listener — uses shared websocketservice (no duplicate SIP sessions)
   useEffect(() => {
-    const socket = getWebSocket();
-    if (!socket) return;
-
-    const handleGlobalMessage = (event) => {
+    const unsubscribe = addMessageListener((event) => {
       try {
         const data = JSON.parse(event.data);
         const currentUserId = localStorage.getItem("user_id");
@@ -297,24 +309,102 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
               icon: "/favicon.ico"
             });
           }
-        } else if (data.type === "incoming_call" && data.type !== "webrtc_call_invitation") {
-          setLocalIncomingCall(data);
+        } else if (data.type === "incoming_call") {
+          // Legacy SIP incoming call (Asterisk) — normalize to same overlay as WebRTC voice
+          // Generic for any extension, no hardcoded users
+          console.log('[Dashboard] Legacy incoming_call:', data);
+          if (!incomingCall && !activeCallContact) {
+            setLocalIncomingCall({
+              from: data.caller || data.from,
+              fromUsername: data.caller_username || data.from_username,
+              caller_username: data.caller_username,
+              channel: data.channel,
+              callId: data.channel,
+              priority: data.priority || 'normal',
+              transport: data.transport || 'transport-ws'
+            });
+          }
+        } else if (data.type === "webrtc_call_invitation") {
+          // Fallback: if webrtcCallService missed voice invitation (e.g., before init), handle here
+          // Voice only (video handled by videoCallService's overlay)
+          if (data.media === 'video') return;
+          console.log('[Dashboard] Fallback webrtc_call_invitation:', data);
+          if (!incomingCall && !activeCallContact && webrtcCallService && !webrtcCallService.currentCall) {
+            const fallbackData = {
+              from: data.caller_extension,
+              fromUsername: data.caller_username,
+              caller_username: data.caller_username,
+              channel: data.call_id,
+              callId: data.call_id,
+              priority: 'normal',
+              transport: 'transport-ws',
+              onAccept: () => webrtcCallService.acceptCall(),
+              onReject: () => webrtcCallService.rejectCall()
+            };
+            // Ensure webrtcCallService internal state is set if it missed the invite
+            if (!webrtcCallService.currentCall) {
+              webrtcCallService.currentCall = {
+                id: data.call_id,
+                caller: data.caller_extension,
+                callerUsername: data.caller_username,
+                callee: user?.extension,
+                type: 'incoming'
+              };
+            }
+            setLocalIncomingCall(fallbackData);
+          }
         } else if (data.type === "user_status_changed") {
           setContacts(prev => prev.map(c =>
             c.extension === data.extension
               ? { ...c, status: data.status, is_online: data.status === "online" }
               : c
           ));
-        } else if (data.type === "call_ended" || data.type === "webrtc_call_ended") {
+        } else if (data.type === "call_ended" || data.type === "webrtc_call_ended" || data.type === "webrtc_call_cancelled") {
           setLocalIncomingCall(null);
-          toast("Call ended", { duration: 3000 });
+          // Only toast if we were in a call
+          if (activeCallContact || incomingCall) toast("Call ended", { duration: 3000 });
         }
       } catch (e) {}
-    };
+    });
 
-    socket.addEventListener("message", handleGlobalMessage);
-    return () => socket.removeEventListener("message", handleGlobalMessage);
-  }, [currentPage]);
+    return () => unsubscribe();
+  }, [currentPage, incomingCall, activeCallContact, user?.extension]);
+
+  // JsSIP → Asterisk fallback: handle SIP INVITE via sipManager (generic for any extension, no hardcoded users)
+  useEffect(() => {
+    if (!user?.extension) return;
+    const sipHandler = async (data) => {
+      console.log('[Dashboard] SIP incomingCall via sipManager:', data);
+      if (activeCallContact || incomingCall) return;
+      setLocalIncomingCall({
+        from: data.from,
+        fromUsername: data.from,
+        caller_username: data.from,
+        channel: data.session?.remote_identity?.uri?.user ? `PJSIP/${data.from}` : (data.session?.id || data.from),
+        callId: data.session?.id || data.from,
+        priority: 'normal',
+        transport: 'transport-ws',
+        session: data.session,
+        isSip: true,
+        onAccept: async () => {
+          try {
+            await sipManager.answerCall(data.session);
+            setLocalIncomingCall(null);
+            setActiveCallContact({ extension: data.from, name: `Ext ${data.from}` });
+            setCallStatus('Connected');
+          } catch (e) { console.error('SIP answer failed', e); }
+        },
+        onReject: () => {
+          try { sipManager.rejectCall(data.session); } catch {}
+          setLocalIncomingCall(null);
+        }
+      });
+    };
+    sipManager.on('incomingCall', sipHandler);
+    return () => {
+      sipManager.off('incomingCall', sipHandler);
+    };
+  }, [user?.extension, activeCallContact, incomingCall]);
 
   // Listen for incoming call accepted from IncomingCallListener
   useEffect(() => {
@@ -379,8 +469,16 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
           ? "error"
           : "info";
       setNotification({ message: callStatus, type });
+      // Ringback lifecycle: start on Ringing, stop on Connected/Rejected/Failed/Ended
+      if (callStatus.startsWith('Ringing')) {
+        try { startRingback(); } catch {}
+      } else {
+        try { stopRinging(); } catch {}
+      }
       const timer = setTimeout(() => setNotification(null), 3000);
       return () => clearTimeout(timer);
+    } else {
+      try { stopRinging(); } catch {}
     }
   }, [callStatus]);
 
@@ -403,7 +501,8 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   const startCall = async (contact) => {
     setActiveCallContact(contact);
     try {
-      setCallStatus(`Initiating call to ${contact.name}...`);
+      setCallStatus(`Ringing ${contact.name || contact.extension}...`);
+      try { startRingback(); } catch {}
 
       notificationService.addNotification(
         'info',
@@ -414,9 +513,11 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
       const result = await call(contact.extension);
       if (result.method === 'webrtc' && result.call_id) {
         setOutgoingCallId(result.call_id);
+        // Stay in Ringing state until callee accepts — webrtcCallService will transition to Connecting/Connected via status callbacks
+        setCallStatus(`Ringing ${contact.name || contact.extension}...`);
+      } else {
+        setCallStatus("Ringing...");
       }
-      setCallStatus("Connected");
-      notificationService.callConnected(contact.extension);
     } catch (error) {
       console.error("[Dashboard] Call error:", error);
       setCallStatus("Call failed");
@@ -442,18 +543,15 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
   };
 
   const endCall = async () => {
+    try { stopRinging(); } catch {}
     if (activeCallContact && callStatus) {
       try {
         const channel = incomingCallAcceptedData?.channel || outgoingCallId || `PJSIP/${activeCallContact.extension}`;
         await comprehensiveHangup(channel);
-
-        // Add notification for call ended
         notificationService.callEnded(activeCallContact.extension, 'Unknown duration');
       } catch (error) {
         console.error("[Dashboard] End call error:", error);
         setNotification({ message: "Failed to end call", type: "error" });
-
-        // Add notification for end call failure
         notificationService.addNotification(
           'error',
           'End Call Failed',
@@ -690,7 +788,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                   { id: "voicemail", label: "Voicemail", icon: VoicemailIcon, badge: voicemailUnread },
                   { id: "calllogs", label: "Call Logs", icon: Clock },
                   { id: "video", label: "Video Call", icon: Phone },
-                  { id: "softphone", label: "Softphone", icon: Smartphone },
                   { id: "notifications", label: "Notifications", icon: Bell },
                 ].map((item) => {
                   const Icon = item.icon;
@@ -972,16 +1069,6 @@ const DashboardPage = ({ user, onLogout, darkMode, setIncomingCall }) => {
                       darkMode ? "bg-secondary-800" : "bg-white"
                     )}>
                       <VideoCallPage darkMode={isDarkMode} user={user} />
-                    </div>
-                  </div>
-                )}
-                {currentPage === "softphone" && (
-                  <div className="h-full flex flex-col">
-                    <div className={cn(
-                      "flex-1 overflow-hidden rounded-xl",
-                      darkMode ? "bg-secondary-800" : "bg-white"
-                    )}>
-                      <SoftphoneGuidePage darkMode={isDarkMode} />
                     </div>
                   </div>
                 )}

@@ -5,6 +5,7 @@ import { sendWebSocketMessage } from "../services/websocketservice";
 import { hangup } from "../services/hang";
 import webrtcCallService from "../services/webrtcCallService";
 import { cn, getInitials, getAvatarColor } from "../utils/ui";
+import { startRingtone, stopRinging } from "../utils/ringtone";
 
 const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAccepted, onCallRejected, onSwitchToCallPage }) => {
   const [notification, setNotification] = useState(null);
@@ -87,17 +88,21 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
               });
             }
           } else {
-            // For traditional SIP calls, send answer_call message
-            console.log('[IncomingCallPage] Accepting SIP call via WebSocket');
+            // For traditional SIP calls — prefer JsSIP session if present (no duplicate SIP sessions)
+            console.log('[IncomingCallPage] Accepting SIP call');
             setConnectionStatus('Accepting call...');
-
-            await sendWebSocketMessage({
-              type: "answer_call",
-              to: callData.from,
-              from: user.extension,
-              channel: callData.channel,
-              transport: callData.transport || "transport-ws",
-            });
+            if (callData.session) {
+              const sipManager = (await import('../services/sipManager')).default;
+              await sipManager.answerCall(callData.session);
+            } else {
+              await sendWebSocketMessage({
+                type: "answer_call",
+                to: callData.from,
+                from: user.extension,
+                channel: callData.channel,
+                transport: callData.transport || "transport-ws",
+              });
+            }
 
             setConnectionStatus('Call accepted! Connecting...');
 
@@ -131,11 +136,13 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
       rejectCall: async () => {
         try {
           if (isWebRTCCall) {
-            // For WebRTC calls, delegate to WebRTC call service
             console.log('[IncomingCallPage] Rejecting WebRTC call via service');
             webrtcCallService.rejectCall();
+          } else if (callData.session) {
+            console.log('[IncomingCallPage] Rejecting SIP JsSIP session');
+            const sipManager = (await import('../services/sipManager')).default;
+            sipManager.rejectCall(callData.session);
           } else {
-            // For traditional SIP calls, use hangup API and WebSocket
             console.log('[IncomingCallPage] Rejecting SIP call via hangup API');
             await hangup(callData.channel);
             await sendWebSocketMessage({
@@ -163,16 +170,9 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
       }
     };
 
-    audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioContextRef.current.createOscillator();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(440, audioContextRef.current.currentTime);
-    const gainNode = audioContextRef.current.createGain();
-    gainNode.gain.setValueAtTime(0.1, audioContextRef.current.currentTime);
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContextRef.current.destination);
-    oscillator.start();
-    setTimeout(() => oscillator.stop(), 30000);
+    // Use shared ringtone utility (works for any extension, no asset dependency)
+    try { startRingtone(); } catch {}
+    audioContextRef.current = { close: () => stopRinging() };
 
     if (navigator.vibrate) {
       navigator.vibrate([500, 200, 500, 200, 500]);
@@ -192,8 +192,9 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
     }, 1000);
 
     return () => {
+      try { stopRinging(); } catch {}
       if (audioContextRef.current) {
-        audioContextRef.current.close();
+        try { audioContextRef.current.close(); } catch {}
         audioContextRef.current = null;
       }
       if (navigator.vibrate) {
@@ -208,6 +209,7 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
   const handleAccept = async () => {
     if (!callHandlerRef.current) return;
     setIsLoading(true);
+    try { stopRinging(); } catch {}
     try {
       await callHandlerRef.current.acceptCall();
       setNotification({ message: "Call accepted", type: "success" });
@@ -226,8 +228,7 @@ const IncomingCallPage = ({ callData, contacts, user, darkMode = false, onCallAc
 
   const handleReject = async () => {
     if (!callHandlerRef.current) return;
-
-    // Clear the timeout timer since call is being rejected
+    try { stopRinging(); } catch {}
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;

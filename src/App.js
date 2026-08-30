@@ -187,27 +187,15 @@ const App = () => {
 
   const initializeConnection = async (extension) => {
     try {
-      // Use WebRTC mode by default (no traditional SIP registration)
-      await initializeSIP({ extension }, (call) => {
-        // Handle incoming calls
-        console.log('[App.js] Incoming call received:', call);
-        navigate('/calling', {
-          state: {
-            contact: contacts.find((c) => c.extension === call.from) || {
-              name: `Ext ${call.from}`,
-              extension: call.from,
-            },
-            callStatus: 'Incoming',
-            isOutgoing: false,
-            channel: `${call.from}@${(CONFIG?.SIP_SERVER || 'localhost')}`, 
-            session: call.session,
-          },
-        });
-      }, true); // Enable WebRTC mode
-      console.log('[App.js] WebRTC connection initialized for extension:', extension);
+      // Ensure shared WebSocket is connected — DashboardPage owns WebRTC voice incoming UI,
+      // so App.js just guarantees the signaling socket is up and video service is ready.
+      const { connectWebSocket } = await import('./services/websocketservice');
+      connectWebSocket(extension);
+      console.log('[App.js] Shared WebSocket ensured for extension:', extension);
+      // WebRTC voice incoming handling is owned by DashboardPage's webrtcCallService subscription
+      // (single shared WS, no duplicate SIP sessions). No separate initializeSIP here to avoid overwriting callbacks.
     } catch (error) {
       console.error('[App.js] Connection initialization failed:', error);
-      // Don't show error for WebRTC mode since it's expected to skip SIP registration
       if (!error.message.includes('WebRTC mode')) {
         setNotification({ message: `Connection failed: ${error.message}`, type: 'error' });
         setTimeout(() => setNotification(null), 5000);

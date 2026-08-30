@@ -210,8 +210,12 @@ const CallingPage = ({
   useEffect(() => {
     if (propCallStatus === 'Connected' && currentCallStatus !== 'Connected') {
       setCurrentCallStatus('Connected');
+    } else if (propCallStatus && propCallStatus !== currentCallStatus && !isConnected) {
+      // Surface real-time status updates (Connecting, ICE, quality, errors) from
+      // the WebRTC service instead of hiding them behind a frozen placeholder.
+      setCurrentCallStatus(propCallStatus);
     }
-  }, [propCallStatus, currentCallStatus]);
+  }, [propCallStatus, currentCallStatus, isConnected]);
 
   // Sync UI state with audio manager state
   useEffect(() => {
