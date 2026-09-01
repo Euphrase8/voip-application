@@ -217,8 +217,10 @@ func (h *Hub) SendToExtension(extension string, message interface{}) error {
 
 	if !exists || len(clientCopy) == 0 {
 		log.Printf("No client found for extension: %s", extension)
+		traceLog("MISS delivery to %q", extension)
 		return fmt.Errorf("no client found for extension: %s", extension)
 	}
+	traceLog("OUT delivery to %q (success before=%d)", extension, len(clientCopy))
 
 	// Send to all clients for this extension
 	var failedClients []*Client

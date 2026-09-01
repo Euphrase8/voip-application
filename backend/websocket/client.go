@@ -235,6 +235,11 @@ func (c *Client) writePump() {
 // handleMessage processes incoming messages from the client
 func (c *Client) handleMessage(msg Message) {
 	log.Printf("Received message from %s: %+v", c.Extension, msg)
+	if msg.Type == "webrtc_call_accepted" || msg.Type == "webrtc_call_rejected" ||
+		msg.Type == "webrtc_offer" || msg.Type == "webrtc_answer" ||
+		msg.Type == "webrtc_ice_candidate" || msg.Type == "webrtc_call_ended" {
+		traceLog("IN  type=%s from=%s to=%q chan=%q", msg.Type, c.Extension, msg.To, msg.Channel)
+	}
 
 	switch msg.Type {
 	case "ping":

@@ -373,20 +373,13 @@ class WebRTCCallService {
   async handleCallAccepted(message) {
     console.log('[WebRTCCallService] Call accepted by target', message);
 
+    // Only handle acceptance for calls this (voice) service actually initiated.
+    // Outgoing voice calls set `currentCall` in call.js; video calls never do, so
+    // without this the voice service would fabricate a call and a second peer
+    // connection/offer that corrupts video call signaling.
     if (!this.currentCall) {
-      console.error('[WebRTCCallService] No current call found when handling acceptance');
-      if (message.channel && message.from && message.to) {
-        this.currentCall = {
-          id: message.channel || message.call_id,
-          target: message.from,
-          caller: message.to,
-          type: 'outgoing'
-        };
-        console.log('[WebRTCCallService] Reconstructed call info:', this.currentCall);
-      } else {
-        console.error('[WebRTCCallService] Cannot reconstruct call info from message');
-        return;
-      }
+      console.log('[WebRTCCallService] Ignoring acceptance - not in an active voice call');
+      return;
     }
 
     const incomingId = message.call_id || message.channel;
@@ -438,6 +431,10 @@ class WebRTCCallService {
   // Handle call rejected by target
   handleCallRejected(message) {
     console.log('[WebRTCCallService] Call rejected by target', message);
+    if (!this.currentCall) {
+      console.log('[WebRTCCallService] Ignoring rejection - not in an active voice call');
+      return;
+    }
     const incomingId = message.call_id || message.channel;
     if (incomingId && this.currentCall && incomingId !== this.currentCall.id) return;
 
@@ -708,6 +705,10 @@ class WebRTCCallService {
   // Handle received offer
   async handleOffer(message) {
     console.log('[WebRTCCallService] Received offer:', message);
+    if (!this.currentCall) {
+      console.log('[WebRTCCallService] Ignoring offer - not in an active voice call');
+      return;
+    }
     const expected = this.currentCall?.id || message.channel || message.call_id;
     if (this.currentCall && expected && this.currentCall.id !== expected) {
       console.log('[WebRTCCallService] Ignoring offer for different call', expected, this.currentCall.id);
@@ -749,6 +750,10 @@ class WebRTCCallService {
   // Handle received answer
   async handleAnswer(message) {
     console.log('[WebRTCCallService] Received answer:', message);
+    if (!this.currentCall) {
+      console.log('[WebRTCCallService] Ignoring answer - not in an active voice call');
+      return;
+    }
     const expected = this.currentCall?.id || message.channel || message.call_id;
     if (this.currentCall && expected && this.currentCall.id !== expected) return;
 
@@ -775,6 +780,7 @@ class WebRTCCallService {
   async handleIceCandidate(message) {
     try {
       if (!message.candidate) return;
+      if (!this.currentCall) return;
       let candidate = message.candidate;
       if (typeof candidate === 'string') {
         candidate = JSON.parse(candidate);
@@ -809,6 +815,10 @@ class WebRTCCallService {
   // Handle call ended
   handleCallEnded(message) {
     console.log('[WebRTCCallService] Call ended by peer', message);
+    if (!this.currentCall) {
+      console.log('[WebRTCCallService] Ignoring ended - not in an active voice call');
+      return;
+    }
     const incomingId = message.call_id || message.channel;
     if (this.currentCall && incomingId && this.currentCall.id !== incomingId) return;
     if (this.onCallEnded) {
